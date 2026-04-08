@@ -264,9 +264,10 @@ def grade_extraction(
 
     # Overall score = weighted average
     if not field_scores:
-        return 0.0, feedback
+        return 0.01, feedback
 
     overall = sum(field_scores.values()) / len(field_scores)
-    overall = round(max(0.0, min(1.0, overall)), 4)
+    # Clamp to strict (0, 1) — validator rejects exactly 0.0 or 1.0
+    overall = round(max(0.01, min(0.99, overall)), 4)
 
     return overall, feedback
