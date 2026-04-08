@@ -10,7 +10,7 @@ import json
 from typing import Any, Optional
 from uuid import uuid4
 
-from ..models import InvoiceAction, InvoiceObservation, InvoiceState
+from .models import InvoiceAction, InvoiceObservation, InvoiceState
 from .documents import get_document, TASK_REQUIRED_FIELDS
 from .graders import grade_extraction
 
@@ -266,7 +266,6 @@ class InvoiceExtractionEnvironment:
         )
 
         if not done and score < 0.95:
-            # Give hints about which fields need improvement
             weak_fields = [
                 name for name, data in feedback.items()
                 if not data.get("matched", False)
@@ -309,9 +308,9 @@ class InvoiceExtractionEnvironment:
         lines = ["Detailed feedback on last extraction:\n"]
         for field, data in self._last_feedback.items():
             score = data.get("score", 0.0)
-            matched = "✓" if data.get("matched", False) else "✗"
+            matched = "Y" if data.get("matched", False) else "N"
             field_type = data.get("expected_type", "unknown")
-            lines.append(f"  {matched} {field} ({field_type}): {score:.2f}")
+            lines.append(f"  [{matched}] {field} ({field_type}): {score:.2f}")
 
         lines.append(f"\nOverall best score: {self._state.best_score:.2f}")
         lines.append(f"Attempts remaining: {self._state.max_attempts - self._state.attempts_used}")

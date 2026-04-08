@@ -13,7 +13,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ..models import InvoiceAction, InvoiceObservation, InvoiceState
+from .models import InvoiceAction, InvoiceObservation, InvoiceState
 from .environment import InvoiceExtractionEnvironment
 
 logger = logging.getLogger(__name__)
@@ -212,3 +212,9 @@ def create_invoice_app() -> FastAPI:
 
 # Create the app instance
 app = create_invoice_app()
+
+
+def start():
+    """Entry point for `uv run server` / `[project.scripts]`."""
+    import uvicorn
+    uvicorn.run("server.app:app", host="0.0.0.0", port=7860)

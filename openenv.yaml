@@ -2,5 +2,5 @@ spec_version: 1
 name: invoice_extraction_env
 type: space
 runtime: fastapi
-app: invoice_extraction_env.server.app:app
+app: server.app:app
 port: 7860
