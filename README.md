@@ -12,7 +12,7 @@ tags:
 
 # Invoice Extraction Environment
 
-An OpenEnv-compliant environment where AI agents extract structured data from unstructured invoice and receipt documents.
+An OpenEnv-compliant environment where AI agents extract structured data from unstructured invoice and receipt documents. Features **5 difficulty tiers** — from clean invoices to adversarial documents with decoy fields, OCR corruption, and hidden calculations.
 
 **Space URL:** `https://huggingface.co/spaces/musharraf7/invoice-extraction-env`
 
@@ -25,14 +25,14 @@ r = requests.post(f"{url}/reset", json={"task_name": "simple_invoice"})
 print(r.json())
 ```
 
-## Environment Description
+## Why This Environment?
 
-This environment simulates real-world document data extraction — a task faced daily by businesses processing invoices, receipts, and purchase orders. The agent receives unstructured text documents and must extract specific structured fields (invoice numbers, dates, vendor names, line items, totals, etc.).
+Invoice data extraction is a **$5B+ industry** problem faced daily by every business. This environment provides:
 
-### Why This Matters
-- **$5B+ industry:** Automated document processing is one of the largest business process automation markets
-- **Real RL training signal:** Partial-credit rewards on a per-field basis provide rich gradient
-- **Difficulty progression:** Three task levels test increasingly complex reasoning
+- **Real RL training signal**: Per-field partial-credit scoring gives dense reward gradients
+- **Genuine difficulty progression**: From clean invoices to adversarial traps that challenge frontier models
+- **Reward shaping**: Consistency bonuses, efficiency signals, and improvement tracking provide rich learning signals beyond simple field matching
+- **Production relevance**: The task directly models what commercial document processing systems must solve
 
 ## Action Space
 
@@ -65,35 +65,63 @@ Each step returns an `InvoiceObservation`:
 | `attempts_remaining` | int | Remaining extraction attempts |
 | `required_fields` | list | Fields to extract |
 | `done` | bool | Whether the episode has ended |
-| `reward` | float | Reward signal [0.0–1.0] |
+| `reward` | float | Reward signal (0.01–0.99) |
 
-## Tasks
+## Tasks (5 Difficulty Tiers)
 
-### 1. `simple_invoice` (Easy)
-Clean, well-formatted invoices with clear field labels. The agent must extract 8 fields including invoice number, date, vendor/customer names, financial totals, and itemized line items.
+### 1. `simple_invoice` (Easy) — 3 attempts
+Clean, well-formatted invoices with clear field labels.
 
 **Required fields:** `invoice_number`, `date`, `vendor_name`, `customer_name`, `subtotal`, `tax`, `total`, `line_items`
 
-### 2. `messy_invoice` (Medium)
+### 2. `messy_invoice` (Medium) — 3 attempts
 Same fields but from messy, inconsistently formatted documents with abbreviations, typos, and non-standard layouts.
 
 **Required fields:** Same as simple_invoice
 
-### 3. `multi_document` (Hard)
-Complex multi-section documents containing a purchase order, invoice, and credit memo/payment receipt. The agent must cross-reference sections and extract 11 fields including the adjusted total.
+### 3. `multi_document` (Hard) — 5 attempts
+Complex multi-section documents containing a purchase order, invoice, and credit memo/payment receipt. The agent must cross-reference sections.
 
-**Required fields:** All of the above + `po_number`, `adjustment_reason`, `adjusted_total`
+**Required fields:** All basic fields + `po_number`, `adjustment_reason`, `adjusted_total`
+
+### 4. `corrupted_scan` (Very Hard) — 4 attempts
+Simulates OCR-scanned/faxed invoices with systematic character errors:
+- Character substitutions: `0`↔`O`, `1`↔`l`↔`I`, `5`↔`S`, `8`↔`B`
+- Garbled sections and scan artifacts
+- The agent must **reason through noise** to recover the true values
+
+**Required fields:** Same as simple_invoice
+
+### 5. `adversarial_invoice` (Expert) — 6 attempts
+Adversarial documents designed to trap and challenge frontier models:
+- **Decoy fields**: Multiple invoice numbers — only one is current
+- **Hidden calculations**: Discounts the agent must compute
+- **Contradictory sections**: PO vs invoice disagreements
+- **Budget variance alerts**: Agent must identify and explain discrepancies
+
+**Required fields:** All basic fields + `po_number`, `discount_amount`, `original_total`, `discrepancy_notes`
 
 ## Reward Design
 
-- **Per-field scoring:** Each field is scored independently (0.0–1.0)
-  - Text fields: Fuzzy matching with SequenceMatcher
-  - Numeric fields: Exact match (1.0), within 1% (0.9), within 5% (0.5)
-  - Date fields: Normalized comparison (YYYY-MM-DD)
-  - Line items: Matched by best-fit comparison of description, qty, price, amount
-- **Overall score:** Weighted average of all field scores
-- **Episode rewards:** Best score across all extraction attempts
-- **Partial progress:** Feedback identifies weak fields for refinement
+### Per-Field Scoring (Base Score)
+- **Text fields**: Fuzzy matching with SequenceMatcher (0.0–1.0)
+- **Numeric fields**: Exact match (1.0), within 1% (0.9), within 5% (0.5)
+- **Date fields**: Normalized comparison (YYYY-MM-DD)
+- **Line items**: Best-fit matching of description, qty, price, amount
+- **Reasoning fields** (discrepancy_notes): Fuzzy matching with lower threshold
+
+### Reward Shaping Bonuses
+| Bonus | Value | Trigger |
+|-------|-------|---------|
+| **Consistency** | +0.03 | Agent's subtotal + tax = total |
+| **Efficiency** | +0.01–0.02 | Solution found in ≤5 steps |
+| **Improvement** | up to +0.02 | Score improves on retry |
+
+### Episode Mechanics
+- **Best score tracked** across all extraction attempts
+- **Partial progress** feedback identifies weak fields for refinement
+- **Early termination** at score ≥ 0.95
+- **All scores** clamped to strict (0.01, 0.99) range
 
 ## Setup Instructions
 
@@ -107,6 +135,11 @@ docker run -p 7860:7860 invoice-extraction-env
 ```bash
 pip install -r requirements.txt
 uvicorn server.app:app --host 0.0.0.0 --port 7860
+```
+
+### Run with uv
+```bash
+uv run server
 ```
 
 ### Run inference
@@ -135,12 +168,12 @@ python inference.py
 ├── server/
 │   ├── __init__.py
 │   ├── app.py             # FastAPI application
-│   ├── environment.py     # Core environment logic
-│   ├── documents.py       # Document corpus
-│   ├── graders.py         # Scoring/grading logic
-│   └── models.py          # Pydantic Action/Observation types
+│   ├── environment.py     # Core environment logic + reward shaping
+│   ├── documents.py       # 15-document corpus across 5 difficulty tiers
+│   ├── graders.py         # Field-level scoring with fuzzy matching
+│   └── models.py          # Pydantic Action/Observation/State types
 ├── __init__.py            # Package declaration
-├── inference.py           # Baseline inference script
+├── inference.py           # Baseline inference script (all 5 tasks)
 ├── openenv.yaml           # OpenEnv manifest
 ├── pyproject.toml         # Package configuration
 ├── requirements.txt       # Dependencies

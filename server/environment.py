@@ -20,6 +20,8 @@ MAX_ATTEMPTS = {
     "simple_invoice": 3,
     "messy_invoice": 3,
     "multi_document": 5,
+    "corrupted_scan": 4,
+    "adversarial_invoice": 6,
 }
 
 VALID_TASKS = list(TASK_REQUIRED_FIELDS.keys())
@@ -174,16 +176,19 @@ class InvoiceExtractionEnvironment:
         """Return the list of required fields with descriptions."""
         field_descriptions = {
             "invoice_number": "The invoice/document number (string)",
-            "date": "Invoice date in YYYY-MM-DD format",
+            "date": "Invoice date in YYYY-MM-DD format (use reissue date if applicable)",
             "vendor_name": "Name of the vendor/seller/supplier",
             "customer_name": "Name of the customer/buyer/bill-to party",
-            "subtotal": "Subtotal before tax (number)",
+            "subtotal": "Subtotal before tax, after discounts (number)",
             "tax": "Tax amount (number)",
             "total": "Total amount due (number)",
             "line_items": "Array of items: [{description, quantity, unit_price, amount}]",
             "po_number": "Purchase order reference number (string)",
             "adjustment_reason": "Reason for any adjustments/credits (string)",
             "adjusted_total": "Final adjusted total after credits/payments (number)",
+            "discount_amount": "Monetary discount value applied (number, 0 if none)",
+            "original_total": "What the total would have been without adjustments (number)",
+            "discrepancy_notes": "Free-text description of all discrepancies, adjustments, and anomalies found",
         }
 
         lines = ["Required fields to extract:\n"]
@@ -243,9 +248,42 @@ class InvoiceExtractionEnvironment:
 
         # Grade the extraction
         self._state.attempts_used += 1
-        score, feedback = grade_extraction(
+        base_score, feedback = grade_extraction(
             extracted, self._ground_truth, self._required_fields
         )
+
+        # === REWARD SHAPING BONUSES ===
+        bonus = 0.0
+        bonus_details = []
+
+        # 1. Mathematical consistency bonus: subtotal + tax ≈ total
+        ext_sub = _safe_float(extracted.get("subtotal"))
+        ext_tax = _safe_float(extracted.get("tax"))
+        ext_total = _safe_float(extracted.get("total"))
+        if ext_sub is not None and ext_tax is not None and ext_total is not None:
+            computed = round(ext_sub + ext_tax, 2)
+            if abs(computed - ext_total) < 0.02:
+                bonus += 0.03
+                bonus_details.append("consistency_check: +0.03")
+
+        # 2. Improvement tracking: rewarding learning from feedback
+        prev_score = self._state.best_score
+        if self._state.attempts_used > 1 and base_score > prev_score:
+            improvement = min(base_score - prev_score, 0.02)
+            bonus += improvement
+            bonus_details.append(f"improvement: +{improvement:.3f}")
+
+        # 3. Step efficiency signal: fewer steps = small bonus
+        steps_used = self._state.step_count
+        if steps_used <= 3:
+            bonus += 0.02  # Very efficient
+            bonus_details.append("efficiency: +0.02")
+        elif steps_used <= 5:
+            bonus += 0.01  # Moderately efficient
+            bonus_details.append("efficiency: +0.01")
+
+        # Apply bonus (clamped to strict (0, 1))
+        score = round(max(0.01, min(0.99, base_score + bonus)), 4)
 
         # Track best score
         self._state.best_score = max(self._state.best_score, score)
@@ -259,11 +297,14 @@ class InvoiceExtractionEnvironment:
         matched = sum(1 for f in feedback.values() if f.get("matched", False))
         total = len(feedback)
         feedback_text = (
-            f"Extraction scored: {score:.2f}\n"
+            f"Extraction scored: {score:.4f} (base: {base_score:.4f}, bonus: {bonus:.3f})\n"
             f"Fields matched: {matched}/{total}\n"
-            f"Best score so far: {self._state.best_score:.2f}\n"
+            f"Best score so far: {self._state.best_score:.4f}\n"
             f"Attempts remaining: {attempts_remaining}\n"
         )
+
+        if bonus_details:
+            feedback_text += f"Reward bonuses: {', '.join(bonus_details)}\n"
 
         if not done and score < 0.95:
             weak_fields = [
@@ -275,7 +316,7 @@ class InvoiceExtractionEnvironment:
                 feedback_text += "\nUse 'get_feedback' for detailed per-field scores."
 
         if done:
-            feedback_text += f"\n\nEpisode complete. Final score: {self._state.best_score:.2f}"
+            feedback_text += f"\n\nEpisode complete. Final score: {self._state.best_score:.4f}"
 
         return InvoiceObservation(
             done=done,
@@ -287,6 +328,9 @@ class InvoiceExtractionEnvironment:
             required_fields=self._required_fields,
             metadata={
                 "score": score,
+                "base_score": base_score,
+                "bonus": bonus,
+                "bonus_details": bonus_details,
                 "best_score": self._state.best_score,
                 "field_scores": {k: v["score"] for k, v in feedback.items()},
             },
@@ -334,3 +378,19 @@ class InvoiceExtractionEnvironment:
     def close(self) -> None:
         """Clean up resources."""
         self._initialized = False
+
+
+def _safe_float(value) -> float:
+    """Safely convert a value to float, returning None on failure."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        import re
+        cleaned = re.sub(r"[$ ,]", "", value.strip())
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return None
+    return None

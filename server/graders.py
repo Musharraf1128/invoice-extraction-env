@@ -236,9 +236,12 @@ def grade_extraction(
     field_scores = {}
     feedback = {}
 
-    numeric_fields = {"total", "subtotal", "tax", "adjusted_total"}
+    numeric_fields = {"total", "subtotal", "tax", "adjusted_total",
+                       "discount_amount", "original_total"}
     date_fields = {"date", "due_date"}
     list_fields = {"line_items"}
+    # Free-text reasoning fields — graded with lower threshold
+    reasoning_fields = {"discrepancy_notes", "adjustment_reason"}
 
     for field in required_fields:
         expected = ground_truth.get(field)
@@ -250,6 +253,9 @@ def grade_extraction(
             score = grade_numeric(actual, expected)
         elif field in date_fields:
             score = grade_date(actual, expected)
+        elif field in reasoning_fields:
+            # Free-text reasoning: use fuzzy matching with generous partial credit
+            score = grade_text(actual, expected)
         else:
             score = grade_text(actual, expected)
 
@@ -258,8 +264,9 @@ def grade_extraction(
             "score": score,
             "expected_type": "list" if field in list_fields else
                             "number" if field in numeric_fields else
-                            "date" if field in date_fields else "text",
-            "matched": score >= 0.8,
+                            "date" if field in date_fields else
+                            "reasoning" if field in reasoning_fields else "text",
+            "matched": score >= 0.5 if field in reasoning_fields else score >= 0.8,
         }
 
     # Overall score = weighted average

@@ -3,9 +3,9 @@
 Baseline inference script for the Invoice Extraction Environment.
 
 This script demonstrates how an LLM agent interacts with the environment
-to extract structured data from invoice documents. It runs all three tasks
-(simple_invoice, messy_invoice, multi_document) and logs results in the
-mandatory OpenEnv [START]/[STEP]/[END] format.
+to extract structured data from invoice documents. It runs all five tasks
+(simple_invoice, messy_invoice, multi_document, corrupted_scan, adversarial_invoice)
+and logs results in the mandatory OpenEnv [START]/[STEP]/[END] format.
 
 Required environment variables:
     API_BASE_URL       — OpenAI-compatible API endpoint
@@ -35,7 +35,7 @@ ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 # Optional — if you use from_docker_image():
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-TASKS = ["simple_invoice", "messy_invoice", "multi_document"]
+TASKS = ["simple_invoice", "messy_invoice", "multi_document", "corrupted_scan", "adversarial_invoice"]
 
 # ---------------------------------------------------------------------------
 # LLM Client (OpenAI-compatible, configured via env vars)
@@ -100,11 +100,45 @@ RULES:
 - For monetary amounts, use plain numbers without currency symbols (e.g. 1134.00)
 - For line_items, use an array of objects with keys: description, quantity, unit_price, amount
 - If a field cannot be found, use null
-- For the multi_document task, look across all document sections (invoice, credit memo, PO, etc.)
-- adjusted_total is the final amount after credits/payments
-- po_number is the purchase order reference number
+{task_specific_rules}
+
+IMPORTANT: Ensure your extracted subtotal + tax = total. Verify math consistency.
 
 JSON:"""
+
+TASK_RULES = {
+    "simple_invoice": "",
+    "messy_invoice": (
+        "- This document uses informal formatting, abbreviations, and shorthand\n"
+        "- Look past formatting irregularities to find the actual values\n"
+        "- 'subtot', 's/t', 'sub' = subtotal; 'tx' = tax; 'amt due' = total"
+    ),
+    "multi_document": (
+        "- This contains MULTIPLE document sections (PO, Invoice, Credit Memo, etc.)\n"
+        "- Extract from the INVOICE section primarily\n"
+        "- adjusted_total is the final amount after credits/payments\n"
+        "- po_number is the purchase order reference number\n"
+        "- adjustment_reason describes why the total was adjusted"
+    ),
+    "corrupted_scan": (
+        "- WARNING: This is an OCR-scanned document with character errors\n"
+        "- Common OCR substitutions: 0<->O, 1<->l<->I, 5<->S, 8<->B\n"
+        "- Mentally correct OCR errors to recover the true values\n"
+        "- 'lNV' = 'INV', 'S' in numbers = '5', 'O' in numbers = '0'\n"
+        "- Verify all numbers by cross-checking (qty * unit_price = amount)"
+    ),
+    "adversarial_invoice": (
+        "- CAUTION: This document contains DECOY fields and contradictions\n"
+        "- Multiple invoice numbers may appear — use the CURRENT/ACTIVE one, not voided/draft ones\n"
+        "- If there is a reissue date, use that as the date (not the original date)\n"
+        "- subtotal is the ADJUSTED subtotal after any discounts\n"
+        "- discount_amount is the monetary discount value\n"
+        "- original_total is what the total WOULD have been without adjustments\n"
+        "- discrepancy_notes: describe ALL discrepancies, adjustments, and calculations\n"
+        "- po_number: the purchase order reference if present, else null\n"
+        "- Cross-reference different sections to find contradictions"
+    ),
+}
 
 REFINE_PROMPT = """You previously extracted data from an invoice but some fields were incorrect.
 
@@ -128,6 +162,8 @@ RULES:
 - For monetary amounts, use plain numbers without currency symbols
 - For line_items, use an array of objects with keys: description, quantity, unit_price, amount
 - If a field cannot be determined, use null
+- VERIFY: subtotal + tax should equal total
+{task_specific_rules}
 
 JSON:"""
 
@@ -217,7 +253,12 @@ def run_task(env_url: str, task_name: str, seed: int = 0) -> float:
 
         # Step 3: Use LLM to extract fields
         fields_str = "\n".join(f"- {f}" for f in required_fields)
-        prompt = EXTRACT_PROMPT.format(document=document_text, fields=fields_str)
+        task_rules = TASK_RULES.get(task_name, "")
+        prompt = EXTRACT_PROMPT.format(
+            document=document_text,
+            fields=fields_str,
+            task_specific_rules=task_rules,
+        )
         llm_response = call_llm(prompt)
         extracted_json = extract_json_from_response(llm_response)
 
@@ -253,11 +294,13 @@ def run_task(env_url: str, task_name: str, seed: int = 0) -> float:
             weak_fields = [f for f, s in field_scores.items() if s < 0.8]
 
             # Refine with LLM
+            task_rules = TASK_RULES.get(task_name, "")
             refine_prompt = REFINE_PROMPT.format(
                 document=document_text,
                 previous=extracted_json,
                 weak_fields=", ".join(weak_fields) if weak_fields else "all fields",
                 feedback=feedback_text,
+                task_specific_rules=task_rules,
             )
             refined_response = call_llm(refine_prompt)
             refined_json = extract_json_from_response(refined_response)

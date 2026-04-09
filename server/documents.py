@@ -465,6 +465,357 @@ Total with Backorder: $2,498.45 + $170.00 = $2,668.45
             },
         },
     ],
+
+    # =========================================================================
+    # CORRUPTED SCAN — OCR-like artifacts, character substitutions, garbled text
+    # These simulate real scanned/faxed invoices with OCR errors.
+    # =========================================================================
+    "corrupted_scan": [
+        {
+            "id": "corrupt_001",
+            "text": """SC4NNED D0CUMENT - Page 1 of 1
+
+lNVOlCE
+
+lnvoice Nurnber: lNV-2O24-OO1
+Dat.e: Januery 1S, 2O24
+
+Frorn:
+  Acrne Corporati0n
+  l23 Business Avenue
+  New Y0rk, NY 1OOO1
+
+BilI To:
+  Widget C0.
+  4S6 Cornmerce Street
+  Chicag0, lL 6O6O1
+
+Descripti0n                Qty    Unit Price    Arnount
+---------------------------------------------------------
+Widget Type A               1O      $2S.OO     $2SO.OO
+Widget Type 8                S      $4O.OO     $2OO.OO
+ConsuIting Service           8      $7S.OO     $6OO.OO
+
+                                   Subtotal:  $1,OSO.OO
+                                   Tax (8%):     $84.OO
+                                   T0tal:     $1,l34.OO
+
+Payrnent Terrns: Net 3O
+
+--- END 0F SCAN ---
+""",
+            "ground_truth": {
+                "invoice_number": "INV-2024-001",
+                "date": "2024-01-15",
+                "vendor_name": "Acme Corporation",
+                "customer_name": "Widget Co.",
+                "subtotal": 1050.00,
+                "tax": 84.00,
+                "total": 1134.00,
+                "line_items": [
+                    {"description": "Widget Type A", "quantity": 10, "unit_price": 25.00, "amount": 250.00},
+                    {"description": "Widget Type B", "quantity": 5, "unit_price": 40.00, "amount": 200.00},
+                    {"description": "Consulting Service", "quantity": 8, "unit_price": 75.00, "amount": 600.00},
+                ],
+            },
+        },
+        {
+            "id": "corrupt_002",
+            "text": """[SCAN QUALITY: P00R - SOME CHARACTERS MAY BE lNCORRECT]
+
+TECHSTART S0LUTl0NS LLC
+89O lnnovation Dr, Suite 2OO
+San Francisc0, CA 941OS
+
+lNV0lCE #: TS~S892
+DATE: O3/O3/2O24
+
+CUSTOMERr DataFIow lnc.
+          321 AnaIytics BIvd
+          Austin, TX 787O1
+
+Servicc                       Qty   Unit Pricc     Total
+----------------------------------------------------------
+CIoud Hosting (MonthIy)         l     $4SO.OO    $4SO.OO
+APl lntegration Setup           l   $l,2OO.OO  $l,2OO.OO
+TechnicaI Support (hours)      l2      $9S.OO  $l,l4O.OO
+
+                                    SubtotaI:  $2,79O.OO
+                                    Tax (7%)):    $l9S.3O
+                                    TotaI:     $2,98S.3O
+
+Due Date: ApriI 2, 2O24
+
+[PAGE 1/1 - SCAN C0MPLETE]
+""",
+            "ground_truth": {
+                "invoice_number": "TS-5892",
+                "date": "2024-03-03",
+                "vendor_name": "TechStart Solutions LLC",
+                "customer_name": "DataFlow Inc.",
+                "subtotal": 2790.00,
+                "tax": 195.30,
+                "total": 2985.30,
+                "line_items": [
+                    {"description": "Cloud Hosting (Monthly)", "quantity": 1, "unit_price": 450.00, "amount": 450.00},
+                    {"description": "API Integration Setup", "quantity": 1, "unit_price": 1200.00, "amount": 1200.00},
+                    {"description": "Technical Support (hours)", "quantity": 12, "unit_price": 95.00, "amount": 1140.00},
+                ],
+            },
+        },
+        {
+            "id": "corrupt_003",
+            "text": """---FAXED DOCUMENT---
+RECEIVED: 02/20/2024 14:32
+QUALITY: [####===---] 40%
+
+GL0BAL SUPPLlES lNC.
+25OO lndustriaI Parkway
+Detr0it, Ml 482Ol
+
+lNVOlCE
+
+lnvoice Number: GS-2O24-Ol47
+Date: February 2O, 2024
+
+T0:
+  Riverside Manufactur1ng
+  78O Factory R0ad
+  CIeveIand, 0H 44l0l
+
+Product                    Qty    Price Each    Line Total
+-----------------------------------------------------------
+SteeI BoIts (Box/lOO)       SO       $l2.SO       $62S.OO
+Copper Wire (SOOft RoII)     8       $8S.OO       $68O.OO
+Safety GoggIes (Pack/lO)    2O       $3S.OO       $7OO.OO
+WeIding Rods (BundIe)       lS       $22.OO       $33O.OO
+
+                   [iIIegibIe]
+                                    SubtotaI:   $2,33S.OO
+                                    SaIes Tax:    $l63.4S
+                                    lnvoice T0tal: $2,498.4S
+
+Terrns: Net 4S
+---END FAX---
+""",
+            "ground_truth": {
+                "invoice_number": "GS-2024-0147",
+                "date": "2024-02-20",
+                "vendor_name": "Global Supplies Inc.",
+                "customer_name": "Riverside Manufacturing",
+                "subtotal": 2335.00,
+                "tax": 163.45,
+                "total": 2498.45,
+                "line_items": [
+                    {"description": "Steel Bolts (Box/100)", "quantity": 50, "unit_price": 12.50, "amount": 625.00},
+                    {"description": "Copper Wire (500ft Roll)", "quantity": 8, "unit_price": 85.00, "amount": 680.00},
+                    {"description": "Safety Goggles (Pack/10)", "quantity": 20, "unit_price": 35.00, "amount": 700.00},
+                    {"description": "Welding Rods (Bundle)", "quantity": 15, "unit_price": 22.00, "amount": 330.00},
+                ],
+            },
+        },
+    ],
+
+    # =========================================================================
+    # ADVERSARIAL INVOICE — Decoy fields, contradictions, hidden calculations
+    # Designed to genuinely challenge frontier models with traps.
+    # =========================================================================
+    "adversarial_invoice": [
+        {
+            "id": "adversarial_001",
+            "text": """INVOICE
+
+*** IMPORTANT: This replaces previous invoice DRAFT-INV-999 which was voided ***
+
+Invoice Number: INV-2024-001-R2
+Previous Reference: DRAFT-INV-999 (VOIDED — DO NOT USE)
+Date: January 15, 2024
+Reissue Date: January 20, 2024
+
+From:
+  Acme Corporation
+  123 Business Avenue, New York, NY 10001
+  Tax ID: 12-3456789
+
+Bill To:
+  Widget Co. (DBA "WidgetCorp International")
+  456 Commerce Street, Chicago, IL 60601
+  Customer Account: WC-0042
+
+Description                Qty    Unit Price    Amount
+---------------------------------------------------------
+Widget Type A               10      $25.00     $250.00
+Widget Type B                5      $40.00     $200.00
+Consulting Service           8      $75.00     $600.00
+  ** EARLY PAYMENT DISCOUNT: -5% on consulting **
+
+                                   Subtotal:  $1,050.00
+                              Discount (5%):    -$30.00
+                         Adjusted Subtotal:   $1,020.00
+                                   Tax (8%):     $81.60
+                                   Total:     $1,101.60
+
+NOTE: Original quote (QT-2024-555) was $1,134.00 but discount applied.
+Per agreement dated Jan 12, if paid within 10 days.
+
+Payment Terms: Net 10 (discounted) / Net 30 (full price $1,134.00)
+""",
+            "ground_truth": {
+                "invoice_number": "INV-2024-001-R2",
+                "date": "2024-01-20",
+                "vendor_name": "Acme Corporation",
+                "customer_name": "Widget Co.",
+                "subtotal": 1020.00,
+                "tax": 81.60,
+                "total": 1101.60,
+                "discount_amount": 30.00,
+                "original_total": 1134.00,
+                "line_items": [
+                    {"description": "Widget Type A", "quantity": 10, "unit_price": 25.00, "amount": 250.00},
+                    {"description": "Widget Type B", "quantity": 5, "unit_price": 40.00, "amount": 200.00},
+                    {"description": "Consulting Service", "quantity": 8, "unit_price": 75.00, "amount": 600.00},
+                ],
+                "discrepancy_notes": "5% early payment discount applied to consulting. Reissued invoice replaces voided DRAFT-INV-999. Adjusted subtotal $1,020 vs original $1,050.",
+            },
+        },
+        {
+            "id": "adversarial_002",
+            "text": """--- PURCHASE ORDER ---
+PO#: PO-DF-2024-112
+Date: February 28, 2024
+Vendor: TechStart Solutions LLC
+Buyer: DataFlow Inc.
+Authorized Budget: $2,600.00 (pre-tax)
+
+Items:
+1. Cloud Hosting - 1 unit @ $450.00 = $450.00
+2. API Integration - 1 unit @ $1,200.00 = $1,200.00
+3. Tech Support - 10 hours @ $95.00/hr = $950.00
+PO Total: $2,600.00
+
+--- INVOICE ---
+Invoice: TS-5892-FINAL
+Date: March 3, 2024
+PO Reference: PO-DF-2024-112
+
+From: TechStart Solutions LLC
+To: DataFlow Inc.
+
+Service                       Qty   Rate        Amount
+Cloud Hosting (Monthly)         1   $450.00    $450.00
+API Integration Setup           1   $1,200.00  $1,200.00
+Technical Support (actual)     12   $95.00     $1,140.00
+  >> 2 hrs over PO estimate, approved by J. Smith 03/01/2024
+Rush Processing Fee             1   $150.00    $150.00
+  >> Added per emergency request ER-2024-033
+
+Subtotal: $2,940.00
+Tax (7%): $205.80
+Total: $3,145.80
+
+!!! BUDGET VARIANCE ALERT !!!
+PO Authorized: $2,600.00
+Actual (pre-tax): $2,940.00
+Variance: $340.00 OVER BUDGET (13.1%)
+Causes: Support overage ($190), Rush fee ($150)
+
+--- PAYMENT SCHEDULE ---
+Payment 1 (due 03/15): $1,500.00
+Payment 2 (due 04/02): $1,645.80
+""",
+            "ground_truth": {
+                "invoice_number": "TS-5892-FINAL",
+                "date": "2024-03-03",
+                "vendor_name": "TechStart Solutions LLC",
+                "customer_name": "DataFlow Inc.",
+                "subtotal": 2940.00,
+                "tax": 205.80,
+                "total": 3145.80,
+                "po_number": "PO-DF-2024-112",
+                "discount_amount": 0.00,
+                "original_total": 2600.00,
+                "line_items": [
+                    {"description": "Cloud Hosting (Monthly)", "quantity": 1, "unit_price": 450.00, "amount": 450.00},
+                    {"description": "API Integration Setup", "quantity": 1, "unit_price": 1200.00, "amount": 1200.00},
+                    {"description": "Technical Support (actual)", "quantity": 12, "unit_price": 95.00, "amount": 1140.00},
+                    {"description": "Rush Processing Fee", "quantity": 1, "unit_price": 150.00, "amount": 150.00},
+                ],
+                "discrepancy_notes": "Invoice exceeds PO by $340 (13.1%). 2 extra support hours ($190) and rush processing fee ($150) added. PO authorized $2,600 but actual pre-tax is $2,940.",
+            },
+        },
+        {
+            "id": "adversarial_003",
+            "text": """CONSOLIDATED STATEMENT
+
+Account: Riverside Manufacturing
+Statement Period: February 2024
+Prepared by: Global Supplies Inc., Accounts Receivable
+
+=== TRANSACTION 1: ORIGINAL INVOICE ===
+Invoice: GS-2024-0147
+Date: February 20, 2024
+PO: PO-RM-2024-033
+
+Steel Bolts (Box/100)       50   @ $12.50    =    $625.00
+Copper Wire (500ft Roll)    10   @ $85.00    =    $850.00
+Safety Goggles (Pack/10)    20   @ $35.00    =    $700.00
+Welding Rods (Bundle)       15   @ $22.00    =    $330.00
+
+Invoice Subtotal: $2,505.00
+Tax (7%): $175.35
+Invoice Total: $2,680.35
+
+=== TRANSACTION 2: ADJUSTMENT ===
+Credit Memo: CM-2024-0201
+Date: February 25, 2024
+Reference: GS-2024-0147
+
+Issue: Copper Wire — only 8 of 10 rolls delivered.
+2 rolls backordered (BO-2024-0089).
+Credit for undelivered: 2 x $85.00 = $170.00
+Tax adjustment: -$11.90
+Total Credit: -$181.90
+
+=== TRANSACTION 3: PRICE CORRECTION ===
+Debit Memo: DM-2024-0055
+Date: February 27, 2024
+
+Steel Bolts price was quoted at $12.50 but contract
+rate is $13.00. Underbilled on 50 boxes.
+Price difference: 50 x $0.50 = $25.00
+Tax on adjustment: $1.75
+Total Debit: $26.75
+
+=== ACCOUNT SUMMARY ===
+Original Invoice:           $2,680.35
+Credit (undelivered wire): -$181.90
+Debit (price correction):   +$26.75
+================================
+Net Amount Due:             $2,525.20
+
+Payment due by: March 20, 2024
+""",
+            "ground_truth": {
+                "invoice_number": "GS-2024-0147",
+                "date": "2024-02-20",
+                "vendor_name": "Global Supplies Inc.",
+                "customer_name": "Riverside Manufacturing",
+                "subtotal": 2505.00,
+                "tax": 175.35,
+                "total": 2680.35,
+                "po_number": "PO-RM-2024-033",
+                "discount_amount": 0.00,
+                "original_total": 2680.35,
+                "line_items": [
+                    {"description": "Steel Bolts (Box/100)", "quantity": 50, "unit_price": 12.50, "amount": 625.00},
+                    {"description": "Copper Wire (500ft Roll)", "quantity": 10, "unit_price": 85.00, "amount": 850.00},
+                    {"description": "Safety Goggles (Pack/10)", "quantity": 20, "unit_price": 35.00, "amount": 700.00},
+                    {"description": "Welding Rods (Bundle)", "quantity": 15, "unit_price": 22.00, "amount": 330.00},
+                ],
+                "discrepancy_notes": "Credit memo CM-2024-0201 for 2 undelivered Copper Wire rolls (-$181.90). Debit memo DM-2024-0055 for Steel Bolts price correction (+$26.75). Net adjustment: -$155.15. Final amount due: $2,525.20.",
+            },
+        },
+    ],
 }
 
 
@@ -483,6 +834,16 @@ TASK_REQUIRED_FIELDS = {
         "subtotal", "tax", "total", "line_items",
         "po_number", "adjustment_reason", "adjusted_total",
     ],
+    "corrupted_scan": [
+        "invoice_number", "date", "vendor_name", "customer_name",
+        "subtotal", "tax", "total", "line_items",
+    ],
+    "adversarial_invoice": [
+        "invoice_number", "date", "vendor_name", "customer_name",
+        "subtotal", "tax", "total", "line_items",
+        "po_number", "discount_amount", "original_total",
+        "discrepancy_notes",
+    ],
 }
 
 
@@ -490,7 +851,8 @@ def get_document(task_name: str, doc_index: int = 0) -> dict:
     """Get a document and its metadata for a given task.
 
     Args:
-        task_name: One of 'simple_invoice', 'messy_invoice', 'multi_document'
+        task_name: One of 'simple_invoice', 'messy_invoice', 'multi_document',
+                   'corrupted_scan', 'adversarial_invoice'
         doc_index: Index into the document pool (will wrap around)
 
     Returns:
@@ -504,3 +866,4 @@ def get_document(task_name: str, doc_index: int = 0) -> dict:
         "ground_truth": doc["ground_truth"],
         "required_fields": TASK_REQUIRED_FIELDS.get(task_name, TASK_REQUIRED_FIELDS["simple_invoice"]),
     }
+

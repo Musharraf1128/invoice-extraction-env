@@ -131,11 +131,19 @@ def create_invoice_app() -> FastAPI:
             "name": "invoice_extraction_env",
             "description": (
                 "An environment for extracting structured data from unstructured "
-                "invoice and receipt documents. The agent must identify and extract "
-                "fields like invoice number, dates, vendor name, line items, and totals."
+                "invoice and receipt documents. Features 5 difficulty tiers from "
+                "clean invoices to adversarial documents with decoy fields, OCR "
+                "corruption, and hidden calculations. Reward shaping includes "
+                "consistency bonuses, efficiency signals, and improvement tracking."
             ),
-            "version": "0.1.0",
-            "tasks": ["simple_invoice", "messy_invoice", "multi_document"],
+            "version": "0.2.0",
+            "tasks": [
+                "simple_invoice",
+                "messy_invoice",
+                "multi_document",
+                "corrupted_scan",
+                "adversarial_invoice",
+            ],
         }
 
     # === WebSocket (for persistent sessions) ===
