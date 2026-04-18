@@ -223,6 +223,10 @@ def grade_extraction(
 ) -> Tuple[float, Dict[str, Any]]:
     """Grade the full extraction against ground truth.
 
+    Uses weighted scoring: financial fields (subtotal, tax, total) are
+    weighted 1.5x, line_items 2.0x, and reasoning fields 0.8x to reflect
+    their relative importance in real-world invoice processing.
+
     Args:
         extracted: The agent's extracted fields
         ground_truth: The correct field values
@@ -242,6 +246,14 @@ def grade_extraction(
     list_fields = {"line_items"}
     # Free-text reasoning fields — graded with lower threshold
     reasoning_fields = {"discrepancy_notes", "adjustment_reason"}
+
+    # Field importance weights for weighted average
+    field_weights = {
+        "subtotal": 1.5, "tax": 1.5, "total": 1.5,
+        "adjusted_total": 1.5, "discount_amount": 1.2, "original_total": 1.2,
+        "line_items": 2.0,
+        "discrepancy_notes": 0.8, "adjustment_reason": 0.8,
+    }
 
     for field in required_fields:
         expected = ground_truth.get(field)
@@ -269,11 +281,32 @@ def grade_extraction(
             "matched": score >= 0.5 if field in reasoning_fields else score >= 0.8,
         }
 
-    # Overall score = weighted average
+    # Weighted average
     if not field_scores:
         return 0.01, feedback
 
-    overall = sum(field_scores.values()) / len(field_scores)
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for field, score in field_scores.items():
+        w = field_weights.get(field, 1.0)
+        weighted_sum += score * w
+        weight_total += w
+
+    overall = weighted_sum / weight_total if weight_total > 0 else 0.0
+
+    # Cross-field arithmetic verification bonus
+    gt_sub = ground_truth.get("subtotal")
+    gt_tax = ground_truth.get("tax")
+    gt_total = ground_truth.get("total")
+    if gt_sub is not None and gt_tax is not None and gt_total is not None:
+        ext_sub = normalize_number(extracted.get("subtotal"))
+        ext_tax = normalize_number(extracted.get("tax"))
+        ext_total = normalize_number(extracted.get("total"))
+        if ext_sub is not None and ext_tax is not None and ext_total is not None:
+            computed = round(ext_sub + ext_tax, 2)
+            if abs(computed - ext_total) < 0.02:
+                overall += 0.02  # Arithmetic consistency bonus built into grader
+
     # Clamp to strict (0, 1) — validator rejects exactly 0.0 or 1.0
     overall = round(max(0.01, min(0.99, overall)), 4)
 

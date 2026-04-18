@@ -9,3 +9,8 @@ build/
 venv/
 .pytest_cache/
 .mypy_cache/
+hackathon-instructions.txt
+hackathon_instructions.txt
+preparatory_course.txt
+RESEARCH_1.md
+RESEARCH_2.md

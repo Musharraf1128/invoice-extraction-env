@@ -133,16 +133,27 @@ def create_invoice_app() -> FastAPI:
                 "An environment for extracting structured data from unstructured "
                 "invoice and receipt documents. Features 5 difficulty tiers from "
                 "clean invoices to adversarial documents with decoy fields, OCR "
-                "corruption, and hidden calculations. Reward shaping includes "
-                "consistency bonuses, efficiency signals, and improvement tracking."
+                "corruption, and hidden calculations. Includes procedural document "
+                "generation for infinite training configurations, RLVR-inspired "
+                "composite reward architecture with trajectory milestones, and "
+                "multi-tool agentic workflow for complex tasks."
             ),
-            "version": "0.2.0",
+            "version": "0.3.0",
+            "features": [
+                "procedural_document_generation",
+                "rlvr_composite_rewards",
+                "multi_tool_workflow",
+                "weighted_field_scoring",
+                "cross_field_verification",
+            ],
             "tasks": [
-                "simple_invoice",
-                "messy_invoice",
-                "multi_document",
-                "corrupted_scan",
-                "adversarial_invoice",
+                {"name": "simple_invoice", "difficulty": "easy", "attempts": 3},
+                {"name": "messy_invoice", "difficulty": "medium", "attempts": 3},
+                {"name": "multi_document", "difficulty": "hard", "attempts": 5,
+                 "tools": ["query_related_documents", "verify_calculations", "check_discrepancies"]},
+                {"name": "corrupted_scan", "difficulty": "very_hard", "attempts": 4},
+                {"name": "adversarial_invoice", "difficulty": "expert", "attempts": 6,
+                 "tools": ["query_related_documents", "verify_calculations", "check_discrepancies"]},
             ],
         }
 

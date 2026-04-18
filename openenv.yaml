@@ -4,3 +4,20 @@ type: space
 runtime: fastapi
 app: server.app:app
 port: 7860
+
+tasks:
+  - name: simple_invoice
+    difficulty: easy
+    description: "Clean, well-formatted invoices with clear field labels"
+  - name: messy_invoice
+    difficulty: medium
+    description: "Messy invoices with abbreviations, typos, and non-standard layouts"
+  - name: multi_document
+    difficulty: hard
+    description: "Multi-section documents requiring cross-referencing PO, invoice, and credit memos"
+  - name: corrupted_scan
+    difficulty: very_hard
+    description: "OCR-scanned invoices with systematic character errors"
+  - name: adversarial_invoice
+    difficulty: expert
+    description: "Adversarial documents with decoy fields, hidden calculations, and contradictions"

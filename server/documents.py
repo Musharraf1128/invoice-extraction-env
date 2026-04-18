@@ -847,23 +847,52 @@ TASK_REQUIRED_FIELDS = {
 }
 
 
-def get_document(task_name: str, doc_index: int = 0) -> dict:
+def get_document(task_name: str, doc_index: int = 0, use_procedural: bool = True) -> dict:
     """Get a document and its metadata for a given task.
+
+    For doc_index 0-2, returns static documents (deterministic test fixtures).
+    For doc_index >= 3 (or when use_procedural=True and index wraps), uses the
+    procedural generation engine to create novel documents from the seed.
 
     Args:
         task_name: One of 'simple_invoice', 'messy_invoice', 'multi_document',
                    'corrupted_scan', 'adversarial_invoice'
-        doc_index: Index into the document pool (will wrap around)
+        doc_index: Index / seed for document selection
+        use_procedural: Whether to use procedural generation for indices beyond static pool
 
     Returns:
         dict with 'id', 'text', 'ground_truth', 'required_fields'
     """
     docs = DOCUMENTS.get(task_name, DOCUMENTS["simple_invoice"])
+    required = TASK_REQUIRED_FIELDS.get(task_name, TASK_REQUIRED_FIELDS["simple_invoice"])
+
+    # Use static documents for small indices (deterministic test fixtures)
+    if doc_index < len(docs):
+        doc = docs[doc_index]
+        return {
+            "id": doc["id"],
+            "text": doc["text"],
+            "ground_truth": doc["ground_truth"],
+            "required_fields": required,
+        }
+
+    # Use procedural generation for larger indices
+    if use_procedural:
+        from .procedural import generate_document
+        proc_doc = generate_document(task_name, seed=doc_index)
+        return {
+            "id": proc_doc["id"],
+            "text": proc_doc["text"],
+            "ground_truth": proc_doc["ground_truth"],
+            "required_fields": required,
+        }
+
+    # Fallback: wrap around static docs
     doc = docs[doc_index % len(docs)]
     return {
         "id": doc["id"],
         "text": doc["text"],
         "ground_truth": doc["ground_truth"],
-        "required_fields": TASK_REQUIRED_FIELDS.get(task_name, TASK_REQUIRED_FIELDS["simple_invoice"]),
+        "required_fields": required,
     }
 
