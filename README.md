@@ -14,7 +14,7 @@ tags:
 
 > **Training LLMs to be autonomous financial auditors** — an OpenEnv environment for teaching AI agents to investigate procurement discrepancies, enforce SLA penalties, and navigate adversarial vendor disputes.
 
-**Space URL:** `https://huggingface.co/spaces/musharraf7/invoice-extraction-env`
+**Space URL:** `https://huggingface.co/spaces/musharraf7/esctr-environment`
 
 ---
 
