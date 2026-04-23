@@ -1,5 +1,5 @@
-"""Invoice Extraction Environment — Server package."""
+"""Enterprise Supply Chain & Tax Reconciliation Environment — Server package."""
 
-from .environment import InvoiceExtractionEnvironment
+from .environment import ESCTREnvironment
 
-__all__ = ["InvoiceExtractionEnvironment"]
+__all__ = ["ESCTREnvironment"]

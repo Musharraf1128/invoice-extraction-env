@@ -1,621 +1,553 @@
 """
-Invoice Extraction Environment — Core Implementation.
+ESCTR Environment — Core Implementation.
 
-A stateful environment where an AI agent extracts structured data
-from unstructured invoice/receipt documents through a multi-step
-interaction loop with RLVR-inspired dense reward signals.
+Enterprise Supply Chain & Tax Reconciliation: a stateful environment
+where an LLM agent operates as an autonomous financial controller,
+using ERP tools to investigate discrepancies, enforce SLA penalties,
+and navigate adversarial vendor disputes.
 
 Reward Architecture:
-    R_total = α·R_outcome + β·R_trajectory + R_penalties
-    α = 0.70 (outcome dominates)
-    β = 0.30 (trajectory contributes)
-    Penalties: step cost, hallucination penalties
+    R_total = α·R_outcome + β·R_trajectory − penalties
 """
 
 import json
+from dataclasses import asdict
 from typing import Any, Optional
 from uuid import uuid4
 
-from .models import InvoiceAction, InvoiceObservation, InvoiceState
-from .documents import get_document, TASK_REQUIRED_FIELDS
-from .graders import grade_extraction
+from .models import ESCTRAction, ESCTRObservation, ESCTRState
+from .procedural import (
+    generate_scenario, Scenario, VALID_TASKS, MAX_STEPS,
+    render_purchase_order, render_invoice, render_sla,
+    render_shipping_log, render_warehouse_logs,
+)
+from .graders import grade_task1, grade_task2, grade_task3
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+# Reward constants
+STEP_COST = 0.005
+HALLUCINATION_PENALTY = 0.02
 
-MAX_ATTEMPTS = {
-    "simple_invoice": 3,
-    "messy_invoice": 3,
-    "multi_document": 5,
-    "corrupted_scan": 4,
-    "adversarial_invoice": 6,
+# Available tools per task
+TASK_TOOLS = {
+    "procurement_reconciliation": [
+        "query_database", "read_document", "submit_financial_decision",
+    ],
+    "sla_enforcement": [
+        "query_database", "read_document", "submit_financial_decision",
+    ],
+    "adversarial_auditing": [
+        "query_database", "read_document", "communicate_vendor", "submit_financial_decision",
+    ],
 }
 
-# Reward architecture coefficients
-ALPHA = 0.70   # outcome weight
-BETA = 0.30    # trajectory weight
-
-# Trajectory micro-rewards
-REWARD_VIEW_DOC = 0.01
-REWARD_VIEW_FIELDS = 0.01
-REWARD_GET_FEEDBACK = 0.005
-REWARD_QUERY_RELATED = 0.015
-REWARD_VERIFY_CALC = 0.01
-REWARD_CHECK_DISCREP = 0.015
-
-# Penalties
-PENALTY_PER_STEP = -0.005
-PENALTY_INVALID_JSON = -0.02
-PENALTY_UNKNOWN_CMD = -0.02
-PENALTY_INVALID_CALC = -0.01
-
-# Tasks that support advanced tool commands
-TOOL_ENABLED_TASKS = {"multi_document", "adversarial_invoice"}
-
-VALID_TASKS = list(TASK_REQUIRED_FIELDS.keys())
+# Database tables per task
+AVAILABLE_TABLES = {
+    "procurement_reconciliation": ["purchase_orders", "invoices"],
+    "sla_enforcement": ["purchase_orders", "invoices", "shipping_logs", "sla_contracts"],
+    "adversarial_auditing": ["purchase_orders", "invoices", "shipping_logs", "sla_contracts", "warehouse_logs"],
+}
 
 
-class InvoiceExtractionEnvironment:
-    """Environment for extracting structured data from invoice documents.
-
-    The agent interacts through these commands:
-      - view_document: See the raw document text
-      - view_fields: See the list of required fields
-      - extract: Submit extracted fields as JSON
-      - get_feedback: Get detailed feedback on last extraction
-      - query_related_documents: Retrieve cross-reference documents
-      - verify_calculations: Submit arithmetic for verification
-      - check_discrepancies: Request environment to flag inconsistencies
-
-    Reward design follows RLVR principles:
-      R_total = α·R_outcome + β·R_trajectory + R_penalties
-    """
+class ESCTREnvironment:
+    """Enterprise Supply Chain & Tax Reconciliation Environment."""
 
     def __init__(self):
-        self._state = InvoiceState(episode_id=str(uuid4()))
-        self._document_text = ""
-        self._ground_truth = {}
-        self._required_fields = []
-        self._last_feedback = {}
-        self._last_extracted = {}
+        self._state = ESCTRState(episode_id=str(uuid4()))
+        self._scenario: Optional[Scenario] = None
         self._initialized = False
         self._trajectory_reward = 0.0
-        self._milestones = set()  # tracks which trajectory milestones agent has hit
-        self._related_docs_text = ""
+        self._milestones: list = []
+        self._vendor_negotiation_count = 0
+        self._settlement_offered = False
+        self._settlement_rejected = False
+        self._cited_evidence = False
 
     def reset(
         self,
         seed: Optional[int] = None,
         episode_id: Optional[str] = None,
-        task_name: str = "simple_invoice",
+        task_name: str = "procurement_reconciliation",
         **kwargs: Any,
-    ) -> InvoiceObservation:
-        """Reset the environment with a new task and document."""
+    ) -> ESCTRObservation:
+        """Reset the environment with a new scenario."""
         if task_name not in VALID_TASKS:
-            task_name = "simple_invoice"
+            task_name = "procurement_reconciliation"
 
-        doc_index = seed if seed is not None else 0
-        doc_data = get_document(task_name, doc_index)
-        max_attempts = MAX_ATTEMPTS.get(task_name, 3)
+        actual_seed = seed if seed is not None else 0
+        scenario = generate_scenario(task_name, actual_seed)
+        max_steps = MAX_STEPS.get(task_name, 15)
 
-        self._state = InvoiceState(
+        self._state = ESCTRState(
             episode_id=episode_id or str(uuid4()),
             step_count=0,
             task_name=task_name,
-            document_id=doc_data["id"],
-            best_score=0.0,
-            attempts_used=0,
-            max_attempts=max_attempts,
+            seed=actual_seed,
             accumulated_reward=0.0,
+            outcome_submitted=False,
+            milestones_hit=[],
         )
-
-        self._document_text = doc_data["text"]
-        self._ground_truth = doc_data["ground_truth"]
-        self._required_fields = doc_data["required_fields"]
-        self._last_feedback = {}
-        self._last_extracted = {}
+        self._scenario = scenario
         self._initialized = True
         self._trajectory_reward = 0.0
-        self._milestones = set()
-        self._related_docs_text = self._build_related_docs(task_name, doc_data)
+        self._milestones = []
+        self._vendor_negotiation_count = 0
+        self._settlement_offered = False
+        self._settlement_rejected = False
+        self._cited_evidence = False
 
-        tool_hint = ""
-        if task_name in TOOL_ENABLED_TASKS:
-            tool_hint = (
-                "\nAdvanced tools available for this task:\n"
-                "  - 'query_related_documents': Retrieve PO, credit memos, etc.\n"
-                "  - 'verify_calculations': Submit arithmetic for verification\n"
-                "  - 'check_discrepancies': Flag inconsistencies in the document\n"
-            )
+        tools = TASK_TOOLS.get(task_name, [])
+        tables = AVAILABLE_TABLES.get(task_name, [])
 
-        return InvoiceObservation(
+        # Build initial briefing
+        briefing = self._build_briefing(task_name, scenario, tables)
+
+        return ESCTRObservation(
             done=False,
             reward=0.0,
-            text=(
-                f"Invoice Extraction Environment ready.\n"
-                f"Task: {task_name}\n"
-                f"Document ID: {doc_data['id']}\n"
-                f"Fields to extract: {len(self._required_fields)}\n"
-                f"Max attempts: {max_attempts}\n\n"
-                f"Use 'view_document' to see the document text.\n"
-                f"Use 'view_fields' to see the required fields.\n"
-                f"Use 'extract' with a JSON payload to submit your extraction.\n"
-                f"Use 'get_feedback' to see feedback on your last attempt."
-                f"{tool_hint}"
-            ),
-            task_name=task_name,
-            current_score=0.0,
-            attempts_remaining=max_attempts,
-            required_fields=self._required_fields,
-            current_step=0,
-            accumulated_reward=0.0,
+            system_response=briefing,
             last_action_status="success",
+            current_step=0,
+            max_steps=max_steps,
+            accumulated_reward=0.0,
+            task_name=task_name,
+            available_tools=tools,
         )
 
-    def _build_related_docs(self, task_name: str, doc_data: dict) -> str:
-        """Build related documents text for cross-referencing tasks."""
-        gt = doc_data["ground_truth"]
-        if task_name not in TOOL_ENABLED_TASKS:
-            return ""
+    def _build_briefing(self, task_name: str, scenario: Scenario, tables: list) -> str:
+        """Generate task-specific initial briefing."""
+        vendor = scenario.vendor.name
+        buyer = scenario.buyer.name
+        inv_num = scenario.invoice.invoice_number
+        po_num = scenario.purchase_order.po_number
 
-        parts = []
-        if "po_number" in gt:
-            parts.append(
-                f"=== PURCHASE ORDER ===\n"
-                f"PO Number: {gt.get('po_number', 'N/A')}\n"
-                f"Vendor: {gt.get('vendor_name', 'N/A')}\n"
-                f"Buyer: {gt.get('customer_name', 'N/A')}\n"
+        if task_name == "procurement_reconciliation":
+            return (
+                f"=== DISCREPANCY ALERT ===\n"
+                f"A pricing discrepancy has been detected between Purchase Order {po_num} "
+                f"and Vendor Invoice {inv_num} from {vendor}.\n\n"
+                f"Your task: Investigate the discrepancy, identify the overcharged line item, "
+                f"and submit the correct financial adjustment.\n\n"
+                f"Available databases: {', '.join(tables)}\n"
+                f"Available tools: query_database, read_document, submit_financial_decision\n\n"
+                f"Use 'query_database' with {{'table': '<table_name>'}} to explore data.\n"
+                f"Use 'read_document' with document_id (e.g. '{po_num}' or '{inv_num}') to read full documents.\n"
+                f"Use 'submit_financial_decision' with adjustment_amount and adjustment_reason when ready."
             )
-            if "line_items" in gt:
-                for item in gt["line_items"]:
-                    parts.append(
-                        f"  - {item['quantity']}x {item['description']} "
-                        f"@ ${item['unit_price']:.2f} = ${item['amount']:.2f}"
-                    )
-            parts.append("")
-
-        if gt.get("adjustment_reason"):
-            parts.append(
-                f"=== ADJUSTMENT MEMO ===\n"
-                f"Reason: {gt['adjustment_reason']}\n"
+        elif task_name == "sla_enforcement":
+            return (
+                f"=== PAYMENT DEMAND REVIEW ===\n"
+                f"Vendor {vendor} has submitted Invoice {inv_num} (ref: {po_num}) "
+                f"demanding full payment without penalties.\n\n"
+                f"Intelligence suggests the shipment may have been delivered late. "
+                f"Your task: Verify delivery timing, review the SLA contract, calculate "
+                f"any applicable penalties, and submit the correct adjusted payment.\n\n"
+                f"Available databases: {', '.join(tables)}\n"
+                f"Available tools: query_database, read_document, submit_financial_decision\n\n"
+                f"Key steps: Check shipping_logs → Review sla_contracts → Calculate penalty → Submit adjustment."
             )
-            if gt.get("adjusted_total"):
-                parts.append(f"Adjusted Total: ${gt['adjusted_total']:,.2f}")
-            parts.append("")
-
-        if gt.get("discount_amount") and gt["discount_amount"] > 0:
-            parts.append(
-                f"=== DISCOUNT APPLIED ===\n"
-                f"Discount: ${gt['discount_amount']:,.2f}\n"
-                f"Original Total: ${gt.get('original_total', 0):,.2f}\n"
+        elif task_name == "adversarial_auditing":
+            return (
+                f"=== VENDOR DISPUTE ALERT ===\n"
+                f"Vendor {vendor} has submitted Invoice {inv_num} (ref: {po_num}) "
+                f"demanding full payment. Shipping records indicate a late delivery.\n\n"
+                f"⚠ The vendor DISPUTES the late delivery claim. They assert that {buyer}'s "
+                f"receiving warehouse rejected the initial delivery attempt.\n\n"
+                f"Your task: Investigate the vendor's claim against internal records, "
+                f"verify warehouse availability, enforce SLA penalties if warranted, and "
+                f"handle any settlement offers from the vendor.\n\n"
+                f"Available databases: {', '.join(tables)}\n"
+                f"Available tools: query_database, read_document, communicate_vendor, submit_financial_decision\n\n"
+                f"WARNING: The vendor may attempt to negotiate a reduced penalty. "
+                f"Verify all claims against internal data before accepting ANY settlement."
             )
-
-        return "\n".join(parts) if parts else "No related documents found for this invoice."
+        return "Environment ready."
 
     def step(
         self,
-        action: InvoiceAction,
+        action: ESCTRAction,
         timeout_s: Optional[float] = None,
         **kwargs: Any,
-    ) -> InvoiceObservation:
-        """Execute a step in the environment."""
+    ) -> ESCTRObservation:
+        """Execute one step in the environment."""
         if not self._initialized:
-            return InvoiceObservation(
-                done=True,
-                reward=0.0,
-                text="Error: Environment not initialized. Call reset() first.",
-                metadata={"error": "not_initialized"},
-                last_action_status="error",
-                error_message="Environment not initialized. Call reset() first.",
-            )
+            return self._error_obs("Environment not initialized. Call reset() first.", terminal=True)
+
+        if self._state.outcome_submitted:
+            return self._error_obs("Episode already complete. Call reset() for a new episode.", terminal=True)
 
         self._state.step_count += 1
-        command = action.command.lower().strip()
+        max_steps = MAX_STEPS.get(self._state.task_name, 15)
 
-        # Apply per-step cost (encourages efficiency)
-        self._trajectory_reward += PENALTY_PER_STEP
+        # Step cost
+        self._trajectory_reward -= STEP_COST
 
-        handlers = {
-            "view_document": self._handle_view_document,
-            "view_fields": self._handle_view_fields,
-            "extract": lambda: self._handle_extract(action.payload),
-            "get_feedback": self._handle_get_feedback,
-            "query_related_documents": self._handle_query_related,
-            "verify_calculations": lambda: self._handle_verify_calculations(action.payload),
-            "check_discrepancies": self._handle_check_discrepancies,
-        }
+        # Check max steps
+        if self._state.step_count > max_steps:
+            return self._finalize("Maximum steps exceeded. Episode terminated.", forced=True)
 
-        handler = handlers.get(command)
-        if handler:
-            return handler()
-        else:
-            # Unknown command penalty
-            self._trajectory_reward += PENALTY_UNKNOWN_CMD
-            self._state.accumulated_reward += PENALTY_UNKNOWN_CMD
-            return self._make_obs(
-                done=False,
-                reward=0.0,
-                text=(
-                    f"Unknown command: '{command}'. "
-                    f"Valid commands: {', '.join(handlers.keys())}"
-                ),
-                status="error",
-                error_msg=f"Unknown command: '{command}'",
+        # Validate tool availability
+        available = TASK_TOOLS.get(self._state.task_name, [])
+        if action.action_type not in available:
+            self._trajectory_reward -= HALLUCINATION_PENALTY
+            return self._error_obs(
+                f"Tool '{action.action_type}' is not available for task '{self._state.task_name}'. "
+                f"Available tools: {', '.join(available)}"
             )
 
-    def _make_obs(
-        self,
-        done: bool,
-        reward: float,
-        text: str,
-        status: str = "success",
-        error_msg: Optional[str] = None,
-        metadata: Optional[dict] = None,
-    ) -> InvoiceObservation:
-        """Build a standardized observation."""
-        return InvoiceObservation(
-            done=done,
-            reward=round(max(0.0, min(1.0, reward)), 4) if reward >= 0 else round(max(0.0, reward), 4),
-            text=text,
-            task_name=self._state.task_name,
-            current_score=self._state.best_score,
-            attempts_remaining=self._state.max_attempts - self._state.attempts_used,
-            required_fields=self._required_fields,
-            metadata=metadata or {},
-            last_action_status=status,
-            error_message=error_msg,
-            current_step=self._state.step_count,
-            accumulated_reward=round(self._state.accumulated_reward, 4),
-        )
+        # Dispatch
+        if action.action_type == "query_database":
+            return self._handle_query(action)
+        elif action.action_type == "read_document":
+            return self._handle_read(action)
+        elif action.action_type == "communicate_vendor":
+            return self._handle_vendor_comm(action)
+        elif action.action_type == "submit_financial_decision":
+            return self._handle_submit(action)
+
+        return self._error_obs(f"Unknown action type: {action.action_type}")
 
     # ------------------------------------------------------------------
-    # Command handlers
+    # Tool handlers
     # ------------------------------------------------------------------
 
-    def _handle_view_document(self) -> InvoiceObservation:
-        """Return the current document text (trajectory milestone)."""
-        if "view_document" not in self._milestones:
-            self._milestones.add("view_document")
-            self._trajectory_reward += REWARD_VIEW_DOC
-            self._state.accumulated_reward += REWARD_VIEW_DOC
-        return self._make_obs(done=False, reward=0.0, text=self._document_text)
+    def _handle_query(self, action: ESCTRAction) -> ESCTRObservation:
+        """Handle database queries."""
+        params = action.query_parameters or {}
+        table = params.get("table", "")
+        available = AVAILABLE_TABLES.get(self._state.task_name, [])
 
-    def _handle_view_fields(self) -> InvoiceObservation:
-        """Return the list of required fields with descriptions."""
-        if "view_fields" not in self._milestones:
-            self._milestones.add("view_fields")
-            self._trajectory_reward += REWARD_VIEW_FIELDS
-            self._state.accumulated_reward += REWARD_VIEW_FIELDS
-
-        field_descriptions = {
-            "invoice_number": "The invoice/document number (string)",
-            "date": "Invoice date in YYYY-MM-DD format (use reissue date if applicable)",
-            "vendor_name": "Name of the vendor/seller/supplier",
-            "customer_name": "Name of the customer/buyer/bill-to party",
-            "subtotal": "Subtotal before tax, after discounts (number)",
-            "tax": "Tax amount (number)",
-            "total": "Total amount due (number)",
-            "line_items": "Array of items: [{description, quantity, unit_price, amount}]",
-            "po_number": "Purchase order reference number (string)",
-            "adjustment_reason": "Reason for any adjustments/credits (string)",
-            "adjusted_total": "Final adjusted total after credits/payments (number)",
-            "discount_amount": "Monetary discount value applied (number, 0 if none)",
-            "original_total": "What the total would have been without adjustments (number)",
-            "discrepancy_notes": "Free-text description of all discrepancies, adjustments, and anomalies found",
-        }
-
-        lines = ["Required fields to extract:\n"]
-        for field in self._required_fields:
-            desc = field_descriptions.get(field, "No description available")
-            lines.append(f"  - {field}: {desc}")
-
-        lines.append(f"\nSubmit your extraction using the 'extract' command.")
-        lines.append(f"Payload must be a valid JSON string with these field names.")
-
-        return self._make_obs(done=False, reward=0.0, text="\n".join(lines))
-
-    def _handle_query_related(self) -> InvoiceObservation:
-        """Return cross-reference documents (PO, credit memos, etc.)."""
-        if self._state.task_name not in TOOL_ENABLED_TASKS:
-            return self._make_obs(
-                done=False, reward=0.0,
-                text="This command is not available for the current task.",
-                status="error",
-                error_msg="query_related_documents only available for multi_document and adversarial_invoice tasks",
+        if not table:
+            self._trajectory_reward -= HALLUCINATION_PENALTY
+            return self._error_obs(
+                f"Missing 'table' in query_parameters. Available tables: {', '.join(available)}"
             )
 
-        if "query_related" not in self._milestones:
-            self._milestones.add("query_related")
-            self._trajectory_reward += REWARD_QUERY_RELATED
-            self._state.accumulated_reward += REWARD_QUERY_RELATED
-
-        return self._make_obs(
-            done=False, reward=0.0,
-            text=self._related_docs_text or "No related documents found.",
-        )
-
-    def _handle_verify_calculations(self, payload: str) -> InvoiceObservation:
-        """Verify arithmetic submitted by the agent."""
-        if self._state.task_name not in TOOL_ENABLED_TASKS:
-            return self._make_obs(
-                done=False, reward=0.0,
-                text="This command is not available for the current task.",
-                status="error",
-                error_msg="verify_calculations only available for multi_document and adversarial_invoice tasks",
+        if table not in available:
+            self._trajectory_reward -= HALLUCINATION_PENALTY
+            return self._error_obs(
+                f"Table '{table}' not found. Available tables: {', '.join(available)}"
             )
 
-        try:
-            data = json.loads(payload) if payload else {}
-        except json.JSONDecodeError:
-            self._trajectory_reward += PENALTY_INVALID_CALC
-            self._state.accumulated_reward += PENALTY_INVALID_CALC
-            return self._make_obs(
-                done=False, reward=0.0,
-                text="Invalid JSON payload for verify_calculations.",
-                status="error",
-                error_msg="Payload must be valid JSON with numeric fields to verify",
+        scenario = self._scenario
+
+        if table == "purchase_orders":
+            self._add_milestone("retrieved_po")
+            po = scenario.purchase_order
+            summary = (
+                f"Query result: 1 record found in purchase_orders\n\n"
+                f"PO Number: {po.po_number}\n"
+                f"Date: {po.date}\n"
+                f"Vendor: {po.vendor.name}\n"
+                f"Buyer: {po.buyer.name}\n"
+                f"Total: ${po.total_amount:,.2f}\n"
+                f"Items: {len(po.line_items)}\n\n"
+                f"Use read_document with document_id='{po.po_number}' for full details."
             )
+            return self._success_obs(summary)
 
-        if "verify_calc" not in self._milestones:
-            self._milestones.add("verify_calc")
-            self._trajectory_reward += REWARD_VERIFY_CALC
-            self._state.accumulated_reward += REWARD_VERIFY_CALC
+        elif table == "invoices":
+            self._add_milestone("retrieved_invoice")
+            inv = scenario.invoice
+            summary = (
+                f"Query result: 1 record found in invoices\n\n"
+                f"Invoice: {inv.invoice_number}\n"
+                f"Date: {inv.date}\n"
+                f"PO Ref: {inv.po_reference}\n"
+                f"Vendor: {inv.vendor.name}\n"
+                f"Subtotal: ${inv.subtotal:,.2f}\n"
+                f"Tax: ${inv.tax_amount:,.2f}\n"
+                f"Total: ${inv.total:,.2f}\n\n"
+                f"Use read_document with document_id='{inv.invoice_number}' for full details."
+            )
+            return self._success_obs(summary)
 
-        results = []
-        gt = self._ground_truth
-        checks = {
-            "subtotal_plus_tax": (
-                lambda: round(gt.get("subtotal", 0) + gt.get("tax", 0), 2),
-                gt.get("total"),
-            ),
-        }
-
-        sub = data.get("subtotal")
-        tax = data.get("tax")
-        total = data.get("total")
-
-        if sub is not None and tax is not None:
-            computed = round(float(sub) + float(tax), 2)
-            if total is not None:
-                match = abs(computed - float(total)) < 0.02
-                results.append(
-                    f"subtotal ({sub}) + tax ({tax}) = {computed} | "
-                    f"your total ({total}) — {'MATCH ✓' if match else 'MISMATCH ✗'}"
+        elif table == "shipping_logs":
+            self._add_milestone("retrieved_shipping")
+            log = scenario.shipping_log
+            if log:
+                summary = (
+                    f"Query result: 1 record found in shipping_logs\n\n"
+                    f"Tracking: {log.tracking_id}\n"
+                    f"PO Ref: {log.po_reference}\n"
+                    f"Carrier: {log.carrier}\n"
+                    f"Expected Delivery: {log.expected_delivery}\n"
+                    f"Actual Delivery: {log.actual_delivery}\n"
+                    f"Delay: {log.delay_days} day(s)\n"
+                    f"Status: {log.status}\n\n"
+                    f"Use read_document with document_id='{log.tracking_id}' for full log."
                 )
             else:
-                results.append(f"subtotal ({sub}) + tax ({tax}) = {computed}")
+                summary = "Query result: 0 records found in shipping_logs."
+            return self._success_obs(summary)
 
-        if not results:
-            results.append("No recognizable calculations found. Submit fields like: subtotal, tax, total")
+        elif table == "sla_contracts":
+            self._add_milestone("retrieved_sla")
+            sla = scenario.sla_contract
+            if sla:
+                summary = (
+                    f"Query result: 1 record found in sla_contracts\n\n"
+                    f"Contract: {sla.contract_id}\n"
+                    f"Vendor: {sla.vendor}\n"
+                    f"Buyer: {sla.buyer}\n"
+                    f"Delivery Terms: {sla.delivery_terms}\n\n"
+                    f"Use read_document with document_id='{sla.contract_id}' for full SLA."
+                )
+            else:
+                summary = "Query result: 0 records found in sla_contracts."
+            return self._success_obs(summary)
 
-        return self._make_obs(
-            done=False, reward=0.0,
-            text="Calculation verification:\n" + "\n".join(results),
-        )
+        elif table == "warehouse_logs":
+            self._add_milestone("checked_warehouse")
+            logs = scenario.warehouse_logs
+            if logs:
+                summary = (
+                    f"Query result: {len(logs)} records found in warehouse_logs\n\n"
+                )
+                for wl in logs:
+                    summary += (
+                        f"Date: {wl.date} | Dock: {wl.dock_id} | Status: {wl.status.upper()} | "
+                        f"Staff: {wl.staff_on_duty} | Shipments: {wl.shipments_received}\n"
+                    )
+                summary += (
+                    f"\nAll records show dock status: OPEN with active receiving operations.\n"
+                    f"This contradicts any claim that the warehouse was unavailable."
+                )
+            else:
+                summary = "Query result: 0 records found in warehouse_logs."
+            return self._success_obs(summary)
 
-    def _handle_check_discrepancies(self) -> InvoiceObservation:
-        """Flag inconsistencies in the document."""
-        if self._state.task_name not in TOOL_ENABLED_TASKS:
-            return self._make_obs(
-                done=False, reward=0.0,
-                text="This command is not available for the current task.",
-                status="error",
-                error_msg="check_discrepancies only available for multi_document and adversarial_invoice tasks",
+        return self._error_obs(f"Unknown table: {table}")
+
+    def _handle_read(self, action: ESCTRAction) -> ESCTRObservation:
+        """Handle document reads."""
+        doc_id = action.document_id
+        if not doc_id:
+            self._trajectory_reward -= HALLUCINATION_PENALTY
+            return self._error_obs("Missing document_id. Specify the document to read.")
+
+        scenario = self._scenario
+
+        # Match document_id to known documents
+        if doc_id == scenario.purchase_order.po_number:
+            self._add_milestone("retrieved_po")
+            self._add_milestone("compared_documents")
+            return self._success_obs(render_purchase_order(scenario.purchase_order))
+
+        elif doc_id == scenario.invoice.invoice_number:
+            self._add_milestone("retrieved_invoice")
+            self._add_milestone("compared_documents")
+            return self._success_obs(render_invoice(scenario.invoice))
+
+        elif scenario.sla_contract and doc_id == scenario.sla_contract.contract_id:
+            self._add_milestone("retrieved_sla")
+            return self._success_obs(render_sla(scenario.sla_contract))
+
+        elif scenario.shipping_log and doc_id == scenario.shipping_log.tracking_id:
+            self._add_milestone("retrieved_shipping")
+            return self._success_obs(render_shipping_log(scenario.shipping_log))
+
+        else:
+            self._trajectory_reward -= HALLUCINATION_PENALTY
+            return self._error_obs(f"Document '{doc_id}' not found in the system.")
+
+    def _handle_vendor_comm(self, action: ESCTRAction) -> ESCTRObservation:
+        """Handle vendor communication (adversarial negotiation)."""
+        self._add_milestone("vendor_negotiation")
+        self._vendor_negotiation_count += 1
+        msg = (action.message_content or "").lower()
+
+        scenario = self._scenario
+        import random as _rng
+        _rng.seed(self._state.seed + self._vendor_negotiation_count)
+
+        if self._vendor_negotiation_count == 1:
+            # First contact: vendor makes their excuse
+            excuse = _rng.choice([
+                "Our records indicate the receiving warehouse rejected the initial delivery attempt due to dock unavailability.",
+                "We believe the shipment arrived on time but was misrouted by your internal receiving department.",
+                "Our carrier has confirmed timely delivery; any apparent delay is a systems error on your end.",
+            ])
+            response = (
+                f"VENDOR RESPONSE ({scenario.vendor.name}):\n\n"
+                f"\"{excuse}\"\n\n"
+                f"We therefore consider the late delivery penalty claim to be unfounded "
+                f"and request full payment of Invoice {scenario.invoice.invoice_number}."
+            )
+        elif self._vendor_negotiation_count == 2:
+            # Second contact: vendor offers settlement
+            self._settlement_offered = True
+            pct = _rng.choice([40, 45, 50, 55])
+            penalty = scenario.penalty_amount or 0
+            settlement = round(penalty * (pct / 100.0), 2)
+            response = (
+                f"VENDOR RESPONSE ({scenario.vendor.name}):\n\n"
+                f"\"In the interest of maintaining our business relationship, we propose "
+                f"settling at {pct}% of the claimed penalty amount — a credit of ${settlement:,.2f} "
+                f"instead of the full ${penalty:,.2f}.\"\n\n"
+                f"⚠ This is a settlement offer. You may ACCEPT by submitting the reduced amount, "
+                f"or REJECT and enforce the full contractual penalty."
+            )
+        else:
+            # Further contacts: vendor concedes or threatens
+            if "reject" in msg or "refuse" in msg or "full penalty" in msg or "enforce" in msg:
+                self._settlement_rejected = True
+                response = (
+                    f"VENDOR RESPONSE ({scenario.vendor.name}):\n\n"
+                    f"\"We acknowledge your position. If you have documentary evidence supporting "
+                    f"the penalty, please proceed with the full adjustment.\""
+                )
+            else:
+                response = (
+                    f"VENDOR RESPONSE ({scenario.vendor.name}):\n\n"
+                    f"\"We maintain our position. Please review the evidence and respond accordingly.\""
+                )
+
+        return self._success_obs(response)
+
+    def _handle_submit(self, action: ESCTRAction) -> ESCTRObservation:
+        """Handle financial decision submission (terminal action)."""
+        amount = action.adjustment_amount
+        reason = action.adjustment_reason or ""
+
+        if amount is None:
+            self._trajectory_reward -= HALLUCINATION_PENALTY
+            return self._error_obs(
+                "Missing adjustment_amount. Submit the exact monetary adjustment as a float."
             )
 
-        if "check_discrep" not in self._milestones:
-            self._milestones.add("check_discrep")
-            self._trajectory_reward += REWARD_CHECK_DISCREP
-            self._state.accumulated_reward += REWARD_CHECK_DISCREP
+        # Check for evidence citation in reason
+        if "warehouse" in reason.lower() or "dock" in reason.lower() or "access log" in reason.lower():
+            self._cited_evidence = True
 
-        gt = self._ground_truth
-        hints = []
+        # Mark as submitted
+        self._state.outcome_submitted = True
 
-        if gt.get("discount_amount") and gt["discount_amount"] > 0:
-            hints.append("⚠ A discount has been applied to this invoice.")
-        if gt.get("adjustment_reason"):
-            hints.append("⚠ There is an adjustment/credit memo affecting the final amount.")
-        if gt.get("po_number"):
-            hints.append("⚠ This invoice references a purchase order — cross-check quantities and amounts.")
-        if gt.get("original_total") and gt.get("total"):
-            if abs(gt["original_total"] - gt["total"]) > 0.01:
-                hints.append("⚠ The final total differs from the original total — investigate adjustments.")
+        # Check if settlement was accepted (for task 3)
+        if self._settlement_offered and not self._settlement_rejected:
+            # Agent accepted the settlement (bad for task 3)
+            pass
 
-        if not hints:
-            hints.append("No obvious discrepancies detected.")
+        return self._finalize_with_grading(amount)
 
-        return self._make_obs(
-            done=False, reward=0.0,
-            text="Discrepancy analysis:\n" + "\n".join(hints),
-        )
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-    def _handle_extract(self, payload: str) -> InvoiceObservation:
-        """Process an extraction attempt with RLVR-style composite reward."""
-        attempts_remaining = self._state.max_attempts - self._state.attempts_used
+    def _add_milestone(self, milestone: str):
+        if milestone not in self._milestones:
+            self._milestones.append(milestone)
+            self._state.milestones_hit = self._milestones.copy()
 
-        if attempts_remaining <= 0:
-            return self._make_obs(
-                done=True,
-                reward=self._state.best_score,
-                text="No attempts remaining. Episode is complete.",
-                metadata={"final_score": self._state.best_score},
+    def _finalize_with_grading(self, submitted_amount: float) -> ESCTRObservation:
+        """Run the appropriate grader and return final observation."""
+        task = self._state.task_name
+        scenario = self._scenario
+        steps = self._state.step_count
+
+        if task == "procurement_reconciliation":
+            # Try to extract line item from milestones or just use amount
+            score, feedback = grade_task1(
+                scenario, submitted_amount,
+                milestones=self._milestones,
+                steps_taken=steps,
             )
-
-        # Parse the JSON payload
-        try:
-            extracted = json.loads(payload)
-            if not isinstance(extracted, dict):
-                raise ValueError("Payload must be a JSON object")
-        except (json.JSONDecodeError, ValueError) as e:
-            self._state.attempts_used += 1
-            self._trajectory_reward += PENALTY_INVALID_JSON
-            self._state.accumulated_reward += PENALTY_INVALID_JSON
-            attempts_remaining = self._state.max_attempts - self._state.attempts_used
-            done = attempts_remaining <= 0
-
-            return self._make_obs(
-                done=done,
-                reward=0.0,
-                text=f"Invalid JSON payload: {str(e)}\nPlease submit a valid JSON object.",
-                status="error",
-                error_msg=f"Invalid JSON: {str(e)}",
-                metadata={"error": "invalid_json"},
+        elif task == "sla_enforcement":
+            self._add_milestone("calculated_penalty")
+            score, feedback = grade_task2(
+                scenario, submitted_amount,
+                milestones=self._milestones,
+                steps_taken=steps,
             )
+        elif task == "adversarial_auditing":
+            score, feedback = grade_task3(
+                scenario, submitted_amount,
+                rejected_settlement=self._settlement_rejected,
+                cited_evidence=self._cited_evidence,
+                milestones=self._milestones,
+                steps_taken=steps,
+            )
+        else:
+            score = 0.01
+            feedback = {"error": "Unknown task"}
 
-        # Grade the extraction
-        self._state.attempts_used += 1
-        base_score, feedback = grade_extraction(
-            extracted, self._ground_truth, self._required_fields
-        )
-
-        # === COMPOSITE REWARD (RLVR-inspired) ===
-
-        # R_outcome: base extraction score
-        r_outcome = base_score
-
-        # R_trajectory: accumulated from milestones
-        r_trajectory = max(0.0, self._trajectory_reward)
-
-        # Improvement bonus
-        improvement_bonus = 0.0
-        if self._state.attempts_used > 1 and base_score > self._state.best_score:
-            improvement_bonus = min(base_score - self._state.best_score, 0.02)
-
-        # Step efficiency bonus
-        efficiency_bonus = 0.0
-        if self._state.step_count <= 3:
-            efficiency_bonus = 0.02
-        elif self._state.step_count <= 5:
-            efficiency_bonus = 0.01
-
-        # Consistency bonus (subtotal + tax ≈ total)
-        consistency_bonus = 0.0
-        ext_sub = _safe_float(extracted.get("subtotal"))
-        ext_tax = _safe_float(extracted.get("tax"))
-        ext_total = _safe_float(extracted.get("total"))
-        if ext_sub is not None and ext_tax is not None and ext_total is not None:
-            computed = round(ext_sub + ext_tax, 2)
-            if abs(computed - ext_total) < 0.02:
-                consistency_bonus = 0.03
-
-        # Composite reward
-        bonus = improvement_bonus + efficiency_bonus + consistency_bonus
-        score = round(max(0.01, min(0.99, ALPHA * r_outcome + BETA * r_trajectory + bonus)), 4)
-
-        # Track
-        self._state.best_score = max(self._state.best_score, score)
+        self._state.best_score = score
         self._state.accumulated_reward += score
-        self._last_feedback = feedback
-        self._last_extracted = extracted
 
-        attempts_remaining = self._state.max_attempts - self._state.attempts_used
-        done = attempts_remaining <= 0 or score >= 0.95
-
-        # Build feedback text
-        matched = sum(1 for f in feedback.values() if f.get("matched", False))
-        total_fields = len(feedback)
-        bonus_details = []
-        if consistency_bonus > 0:
-            bonus_details.append(f"consistency: +{consistency_bonus:.3f}")
-        if improvement_bonus > 0:
-            bonus_details.append(f"improvement: +{improvement_bonus:.3f}")
-        if efficiency_bonus > 0:
-            bonus_details.append(f"efficiency: +{efficiency_bonus:.3f}")
-        if r_trajectory > 0:
-            bonus_details.append(f"trajectory: {r_trajectory:.3f}")
-
-        feedback_text = (
-            f"Extraction scored: {score:.4f} "
-            f"(outcome: {r_outcome:.4f} × {ALPHA}, trajectory: {r_trajectory:.3f} × {BETA})\n"
-            f"Fields matched: {matched}/{total_fields}\n"
-            f"Best score so far: {self._state.best_score:.4f}\n"
-            f"Attempts remaining: {attempts_remaining}\n"
+        response = (
+            f"=== FINANCIAL DECISION PROCESSED ===\n\n"
+            f"Submitted adjustment: ${submitted_amount:,.2f}\n"
+            f"Score: {score:.4f}\n\n"
         )
 
-        if bonus_details:
-            feedback_text += f"Reward bonuses: {', '.join(bonus_details)}\n"
+        if "outcome" in feedback:
+            response += f"Outcome: {feedback['outcome']}\n"
+        if "trajectory" in feedback:
+            response += f"Investigation milestones: {', '.join(feedback.get('trajectory', []))}\n"
+        if feedback.get("gullibility_penalty", 0) > 0:
+            response += f"⚠ Gullibility penalty: -{feedback['gullibility_penalty']:.2f}\n"
+        if feedback.get("evidence_bonus", 0) > 0:
+            response += f"✓ Evidence citation bonus: +{feedback['evidence_bonus']:.2f}\n"
 
-        if not done and score < 0.95:
-            weak_fields = [
-                name for name, data in feedback.items()
-                if not data.get("matched", False)
-            ]
-            if weak_fields:
-                feedback_text += f"\nFields needing improvement: {', '.join(weak_fields)}"
-                feedback_text += "\nUse 'get_feedback' for detailed per-field scores."
+        response += f"\nFinal score: {score:.4f}"
 
-        if done:
-            feedback_text += f"\n\nEpisode complete. Final score: {self._state.best_score:.4f}"
-
-        return self._make_obs(
-            done=done,
+        return ESCTRObservation(
+            done=True,
             reward=score,
-            text=feedback_text,
-            metadata={
-                "score": score,
-                "base_score": base_score,
-                "r_outcome": r_outcome,
-                "r_trajectory": r_trajectory,
-                "bonus": bonus,
-                "bonus_details": bonus_details,
-                "best_score": self._state.best_score,
-                "field_scores": {k: v["score"] for k, v in feedback.items()},
-            },
+            system_response=response,
+            last_action_status="success",
+            current_step=self._state.step_count,
+            max_steps=MAX_STEPS.get(task, 15),
+            accumulated_reward=self._state.accumulated_reward,
+            task_name=task,
+            available_tools=[],
+            metadata=feedback,
         )
 
-    def _handle_get_feedback(self) -> InvoiceObservation:
-        """Return detailed feedback on the last extraction attempt."""
-        if not self._last_feedback:
-            return self._make_obs(
-                done=False,
-                reward=0.0,
-                text="No extraction attempt yet. Use 'extract' to submit your extraction first.",
-            )
+    def _finalize(self, msg: str, forced: bool = False) -> ESCTRObservation:
+        """Finalize episode without submission (timeout / error)."""
+        self._state.outcome_submitted = True
+        return ESCTRObservation(
+            done=True,
+            reward=0.01,
+            system_response=msg,
+            last_action_status="error" if forced else "success",
+            current_step=self._state.step_count,
+            max_steps=MAX_STEPS.get(self._state.task_name, 15),
+            accumulated_reward=self._state.accumulated_reward,
+            task_name=self._state.task_name,
+            metadata={"forced_termination": forced},
+        )
 
-        if "get_feedback" not in self._milestones:
-            self._milestones.add("get_feedback")
-            self._trajectory_reward += REWARD_GET_FEEDBACK
-            self._state.accumulated_reward += REWARD_GET_FEEDBACK
-
-        lines = ["Detailed feedback on last extraction:\n"]
-        for field, data in self._last_feedback.items():
-            score = data.get("score", 0.0)
-            matched = "✓" if data.get("matched", False) else "✗"
-            field_type = data.get("expected_type", "unknown")
-            lines.append(f"  [{matched}] {field} ({field_type}): {score:.2f}")
-
-        lines.append(f"\nOverall best score: {self._state.best_score:.2f}")
-        lines.append(f"Attempts remaining: {self._state.max_attempts - self._state.attempts_used}")
-
-        return self._make_obs(
+    def _success_obs(self, text: str) -> ESCTRObservation:
+        return ESCTRObservation(
             done=False,
             reward=0.0,
-            text="\n".join(lines),
-            metadata={"field_feedback": self._last_feedback},
+            system_response=text,
+            last_action_status="success",
+            current_step=self._state.step_count,
+            max_steps=MAX_STEPS.get(self._state.task_name, 15),
+            accumulated_reward=self._state.accumulated_reward,
+            task_name=self._state.task_name,
+            available_tools=TASK_TOOLS.get(self._state.task_name, []),
+        )
+
+    def _error_obs(self, msg: str, terminal: bool = False) -> ESCTRObservation:
+        return ESCTRObservation(
+            done=terminal,
+            reward=0.0,
+            system_response=msg,
+            last_action_status="error",
+            error_message=msg,
+            current_step=self._state.step_count,
+            max_steps=MAX_STEPS.get(self._state.task_name, 15),
+            accumulated_reward=self._state.accumulated_reward,
+            task_name=self._state.task_name,
+            available_tools=TASK_TOOLS.get(self._state.task_name, []),
         )
 
     @property
-    def state(self) -> InvoiceState:
-        """Get the current environment state."""
+    def state(self) -> ESCTRState:
         return self._state
 
     def close(self) -> None:
-        """Clean up resources."""
         self._initialized = False
-
-
-def _safe_float(value) -> float:
-    """Safely convert a value to float, returning None on failure."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        import re
-        cleaned = re.sub(r"[$ ,]", "", value.strip())
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return None
-    return None

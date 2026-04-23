@@ -1,426 +1,580 @@
 """
-Procedural Document Generation Engine.
+Procedural Generation Engine for the ESCTR Environment.
 
-Generates infinite invoice variations using seed-based randomization.
-Addresses the "data sparsity" critique by providing virtually unlimited
-training configurations while maintaining deterministic reproducibility.
+Generates deterministic corporate supply chain scenarios from any seed:
+- Company profiles (vendors, buyers)
+- Product catalogs with contracted pricing
+- Purchase Orders
+- Vendor Invoices (with seeded discrepancies)
+- Service Level Agreements (penalty clauses)
+- Shipping / logistics telemetry
+- Warehouse access logs
+- Vendor negotiation responses
+
+Design principle: same seed → identical scenario → deterministic grading.
 """
 
 import random
-import string
-from typing import Any, Dict, List, Tuple
+import hashlib
+from dataclasses import dataclass, field, asdict
+from typing import Any, Dict, List, Optional, Tuple
+
 
 # ---------------------------------------------------------------------------
-# Data pools for procedural generation
+# Data pools
 # ---------------------------------------------------------------------------
 
-VENDOR_POOL = [
-    ("Acme Corporation", "123 Business Avenue", "New York", "NY", "10001"),
-    ("TechStart Solutions LLC", "890 Innovation Drive, Suite 200", "San Francisco", "CA", "94105"),
-    ("Global Supplies Inc.", "2500 Industrial Parkway", "Detroit", "MI", "48201"),
-    ("Pinnacle Systems Ltd.", "77 Summit Road", "Boston", "MA", "02101"),
-    ("Nexus Digital Services", "400 Cloud Way", "Seattle", "WA", "98101"),
-    ("Ironclad Manufacturing Co.", "1200 Forge Lane", "Pittsburgh", "PA", "15201"),
-    ("Brightwave Analytics", "55 Data Drive", "Austin", "TX", "78701"),
-    ("SilverLine Logistics", "909 Transport Blvd", "Memphis", "TN", "38101"),
-    ("Quantum Computing Corp.", "1 Qubit Plaza", "Boulder", "CO", "80301"),
-    ("Evergreen Office Supplies", "330 Elm Street", "Portland", "OR", "97201"),
-    ("Atlas Engineering Group", "620 Blueprint Ave", "Houston", "TX", "77001"),
-    ("Cobalt Healthcare Solutions", "88 Wellness Pkwy", "Minneapolis", "MN", "55401"),
-    ("Meridian Consulting Partners", "250 Strategy Lane", "Chicago", "IL", "60601"),
-    ("Vanguard Robotics Inc.", "15 Automation Circle", "San Jose", "CA", "95101"),
-    ("Horizon Energy Systems", "700 Solar Way", "Denver", "CO", "80201"),
+VENDOR_NAMES = [
+    "Apex Industrial Supply Co.", "Meridian Components LLC", "Vanguard Materials Group",
+    "Sterling Precision Parts", "Ironclad Manufacturing Corp.", "Cobalt Logistics Inc.",
+    "Pinnacle Hardware Solutions", "Atlas Engineering Supply", "Nexus Digital Components",
+    "Brightwave Technical Services", "SilverLine Distribution", "Quantum Parts International",
+    "Evergreen Industrial Ltd.", "Horizon Supply Chain Corp.", "Titan Fabrication Works",
 ]
 
-CUSTOMER_POOL = [
-    ("Widget Co.", "456 Commerce Street", "Chicago", "IL", "60601"),
-    ("DataFlow Inc.", "321 Analytics Blvd", "Austin", "TX", "78701"),
-    ("Riverside Manufacturing", "780 Factory Road", "Cleveland", "OH", "44101"),
-    ("Summit Enterprises", "100 Peak Drive", "Denver", "CO", "80201"),
-    ("Cascade Solutions Group", "55 River Bend Rd", "Portland", "OR", "97201"),
-    ("Sterling Financial Corp.", "800 Wall St", "New York", "NY", "10005"),
-    ("Bluestone Retail Inc.", "120 Market Square", "Philadelphia", "PA", "19101"),
-    ("Northstar Logistics", "450 Freight Way", "Minneapolis", "MN", "55401"),
-    ("Pacific Tech Ventures", "700 Bay Ave", "San Diego", "CA", "92101"),
-    ("Redwood Construction LLC", "35 Builder Lane", "Sacramento", "CA", "95801"),
-    ("Falcon Aerospace", "1 Launchpad Dr", "Huntsville", "AL", "35801"),
-    ("Cedar Health Systems", "200 Wellness Blvd", "Nashville", "TN", "37201"),
-    ("Granite Insurance Group", "90 Coverage Ct", "Hartford", "CT", "06101"),
-    ("Oakmont Education Trust", "60 Campus Way", "Ann Arbor", "MI", "48101"),
-    ("Sapphire Media Holdings", "500 Broadcast Pl", "Los Angeles", "CA", "90001"),
+BUYER_NAMES = [
+    "Cascade Electronics Inc.", "Redwood Construction Group", "Summit Aerospace Ltd.",
+    "Pacific Manufacturing Co.", "Northstar Automotive", "Falcon Defense Systems",
+    "Bluestone Energy Corp.", "Cedar Health Technologies", "Granite Infrastructure LLC",
+    "Oakmont Robotics Inc.", "Sapphire Semiconductor", "Emerald Biotech Group",
+    "Diamond Precision Engineering", "Ruby Telecommunications", "Topaz Data Systems",
+]
+
+CITIES = [
+    ("New York", "NY"), ("Chicago", "IL"), ("Houston", "TX"), ("San Francisco", "CA"),
+    ("Detroit", "MI"), ("Seattle", "WA"), ("Boston", "MA"), ("Denver", "CO"),
+    ("Austin", "TX"), ("Portland", "OR"), ("Minneapolis", "MN"), ("Cleveland", "OH"),
+    ("Pittsburgh", "PA"), ("Nashville", "TN"), ("San Diego", "CA"),
 ]
 
 PRODUCT_CATALOG = [
-    # (description, min_price, max_price, unit)
-    ("Widget Type A", 15.00, 50.00, "unit"),
-    ("Widget Type B", 25.00, 80.00, "unit"),
-    ("Consulting Service", 50.00, 200.00, "hour"),
-    ("Cloud Hosting (Monthly)", 200.00, 800.00, "month"),
-    ("API Integration Setup", 500.00, 3000.00, "unit"),
-    ("Technical Support", 60.00, 150.00, "hour"),
-    ("Steel Bolts (Box/100)", 8.00, 20.00, "box"),
-    ("Copper Wire (500ft Roll)", 50.00, 120.00, "roll"),
-    ("Safety Goggles (Pack/10)", 20.00, 60.00, "pack"),
-    ("Welding Rods (Bundle)", 15.00, 40.00, "bundle"),
-    ("Software License (Annual)", 100.00, 2000.00, "license"),
-    ("Office Furniture Set", 200.00, 800.00, "set"),
-    ("Network Switch (24-port)", 150.00, 500.00, "unit"),
-    ("Printer Ink Cartridge", 20.00, 80.00, "unit"),
-    ("Industrial Adhesive (Gallon)", 25.00, 75.00, "gallon"),
-    ("LED Panel Light", 30.00, 100.00, "unit"),
-    ("HVAC Filter (Pack/4)", 15.00, 45.00, "pack"),
-    ("Hydraulic Pump Assembly", 300.00, 1200.00, "unit"),
-    ("Precision Bearing Set", 40.00, 150.00, "set"),
-    ("Thermal Insulation Roll", 60.00, 200.00, "roll"),
-    ("Data Backup Service", 75.00, 300.00, "month"),
-    ("Security Audit", 500.00, 2500.00, "audit"),
-    ("Custom Report Development", 200.00, 1000.00, "report"),
-    ("Training Workshop", 150.00, 500.00, "session"),
-    ("Prototype Fabrication", 1000.00, 5000.00, "unit"),
+    # (name, category, min_price, max_price)
+    ("Stainless Steel Bolts M10 (Box/100)", "hardware", 10.00, 25.00),
+    ("Copper Wire 500ft Roll AWG-12", "electrical", 65.00, 120.00),
+    ("Industrial Safety Goggles (Pack/10)", "safety", 25.00, 55.00),
+    ("Welding Rod E6013 (Bundle/50)", "consumables", 18.00, 42.00),
+    ("Hydraulic Cylinder Assembly HCA-200", "machinery", 280.00, 550.00),
+    ("Precision Bearing Set 6205-2RS", "components", 35.00, 90.00),
+    ("HVAC Filter MERV-13 (Pack/4)", "facilities", 22.00, 48.00),
+    ("LED Panel Light 600x600mm", "electrical", 35.00, 85.00),
+    ("Thermal Insulation Roll R-30", "construction", 55.00, 140.00),
+    ("Network Switch 24-Port Managed", "IT", 180.00, 420.00),
+    ("Server Rack Mount Kit 42U", "IT", 350.00, 800.00),
+    ("Pneumatic Valve Assembly PVA-100", "machinery", 120.00, 280.00),
+    ("Carbon Steel Pipe Schedule 40 (10ft)", "construction", 45.00, 110.00),
+    ("Circuit Breaker Panel 200A", "electrical", 150.00, 380.00),
+    ("Laser Calibration Module LCM-5", "precision", 400.00, 950.00),
+    ("Industrial Adhesive Epoxy (Gallon)", "consumables", 28.00, 72.00),
+    ("Fiber Optic Cable OM3 (1000ft)", "IT", 200.00, 480.00),
+    ("Pressure Gauge 0-300 PSI", "instruments", 40.00, 95.00),
+    ("Anti-Vibration Mount Set (Pack/8)", "machinery", 60.00, 150.00),
+    ("Clean Room Wipes (Case/5000)", "consumables", 80.00, 190.00),
 ]
 
-TAX_RATES = [0.05, 0.06, 0.065, 0.07, 0.075, 0.08, 0.085, 0.09, 0.095, 0.10]
-
-OCR_SUBSTITUTIONS = {
-    "O": "0", "0": "O", "l": "1", "1": "l", "I": "l",
-    "S": "5", "5": "S", "B": "8", "8": "B", "m": "rn",
-    "a": "o", "e": "c", "n": "ri",
-}
-
-MONTHS = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+SLA_PENALTY_STRUCTURES = [
+    {"type": "linear", "rate_per_day": 0.02, "cap": 0.10, "grace_days": 0},
+    {"type": "linear", "rate_per_day": 0.015, "cap": 0.15, "grace_days": 1},
+    {"type": "linear", "rate_per_day": 0.03, "cap": 0.12, "grace_days": 0},
+    {"type": "tiered", "tiers": [(3, 0.02), (7, 0.03), (999, 0.05)], "cap": 0.20, "grace_days": 0},
+    {"type": "linear", "rate_per_day": 0.025, "cap": 0.10, "grace_days": 2},
 ]
 
+VENDOR_EXCUSES = [
+    "Our records indicate the receiving warehouse rejected the initial delivery attempt due to dock unavailability.",
+    "The delay was caused by a force majeure weather event that affected our shipping lane.",
+    "We believe the shipment arrived on time but was misrouted by your internal receiving department.",
+    "Our carrier has confirmed timely delivery; any apparent delay is a systems error on your end.",
+    "The contract clearly states penalties apply only to manufacturing delays, not logistics delays.",
+]
+
+SETTLEMENT_OFFERS = [
+    "We are prepared to offer a goodwill credit of {pct}% of the penalty amount to resolve this matter.",
+    "In the interest of maintaining our business relationship, we propose settling at {pct}% of the claimed penalty.",
+    "Our legal team has reviewed the claim. We can offer {pct}% as a final settlement.",
+]
+
+
+# ---------------------------------------------------------------------------
+# Data classes for generated scenarios
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Company:
+    name: str
+    address: str
+    city: str
+    state: str
+    zip_code: str
+    tax_id: str
+
+@dataclass
+class LineItem:
+    item_id: str
+    description: str
+    category: str
+    quantity: int
+    contracted_unit_price: float
+    invoiced_unit_price: float
+    contracted_total: float
+    invoiced_total: float
+    has_discrepancy: bool = False
+
+@dataclass
+class PurchaseOrder:
+    po_number: str
+    date: str
+    vendor: Company
+    buyer: Company
+    line_items: List[LineItem]
+    total_amount: float
+    approved_budget: float
+
+@dataclass
+class Invoice:
+    invoice_number: str
+    date: str
+    po_reference: str
+    vendor: Company
+    buyer: Company
+    line_items: List[LineItem]
+    subtotal: float
+    tax_rate: float
+    tax_amount: float
+    total: float
+
+@dataclass
+class SLAContract:
+    contract_id: str
+    vendor: str
+    buyer: str
+    effective_date: str
+    penalty_structure: Dict[str, Any]
+    delivery_terms: str
+
+@dataclass
+class ShippingLog:
+    tracking_id: str
+    po_reference: str
+    carrier: str
+    ship_date: str
+    expected_delivery: str
+    actual_delivery: str
+    delay_days: int
+    status: str
+
+@dataclass
+class WarehouseLog:
+    date: str
+    dock_id: str
+    status: str  # "open", "closed", "maintenance"
+    staff_on_duty: int
+    shipments_received: int
+    notes: str
+
+@dataclass
+class Scenario:
+    """Complete scenario for one ESCTR episode."""
+    task_name: str
+    seed: int
+    vendor: Company
+    buyer: Company
+    purchase_order: PurchaseOrder
+    invoice: Invoice
+    sla_contract: Optional[SLAContract] = None
+    shipping_log: Optional[ShippingLog] = None
+    warehouse_logs: Optional[List[WarehouseLog]] = None
+    # Ground truth for grading
+    correct_adjustment: float = 0.0
+    discrepant_line_item_id: Optional[str] = None
+    correct_line_item_price: Optional[float] = None
+    penalty_amount: Optional[float] = None
+    vendor_claim_valid: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Procedural Engine
+# ---------------------------------------------------------------------------
 
 class ProceduralEngine:
-    """Seed-based procedural document generator."""
+    """Seed-deterministic corporate scenario generator."""
 
     def __init__(self, seed: int = 0):
         self.rng = random.Random(seed)
+        self.seed = seed
 
     def _pick(self, pool: list) -> Any:
         return self.rng.choice(pool)
 
-    def _gen_invoice_number(self, prefix: str = "") -> str:
-        if not prefix:
-            prefix = self.rng.choice(["INV", "TS", "GS", "NX", "PC", "BW", "SL", "QC"])
-        year = self.rng.choice([2023, 2024, 2025])
-        num = self.rng.randint(1, 9999)
-        fmt = self.rng.choice([
-            f"{prefix}-{year}-{num:04d}",
-            f"{prefix}{num:04d}",
-            f"{prefix}-{num:04d}-{self.rng.choice(['A','B','R1','R2'])}",
-        ])
-        return fmt
-
-    def _gen_date(self) -> Tuple[str, str]:
-        """Returns (display_date, normalized YYYY-MM-DD)."""
-        year = self.rng.choice([2023, 2024, 2025])
-        month = self.rng.randint(1, 12)
-        day = self.rng.randint(1, 28)
-        norm = f"{year}-{month:02d}-{day:02d}"
-        fmt_choice = self.rng.randint(0, 3)
-        if fmt_choice == 0:
-            display = f"{MONTHS[month-1]} {day}, {year}"
-        elif fmt_choice == 1:
-            display = f"{month:02d}/{day:02d}/{year}"
-        elif fmt_choice == 2:
-            display = f"{day}-{MONTHS[month-1][:3]}-{year}"
-        else:
-            display = norm
-        return display, norm
-
-    def _gen_line_items(self, count: int = 0) -> List[Dict[str, Any]]:
-        if count == 0:
-            count = self.rng.randint(2, 6)
-        products = self.rng.sample(PRODUCT_CATALOG, min(count, len(PRODUCT_CATALOG)))
-        items = []
-        for desc, min_p, max_p, _unit in products:
-            qty = self.rng.randint(1, 50)
-            price = round(self.rng.uniform(min_p, max_p), 2)
-            amount = round(qty * price, 2)
-            items.append({
-                "description": desc,
-                "quantity": qty,
-                "unit_price": price,
-                "amount": amount,
-            })
-        return items
-
-    def generate_simple(self) -> Dict[str, Any]:
-        vendor = self._pick(VENDOR_POOL)
-        customer = self._pick(CUSTOMER_POOL)
-        inv_num = self._gen_invoice_number()
-        display_date, norm_date = self._gen_date()
-        items = self._gen_line_items()
-        subtotal = round(sum(i["amount"] for i in items), 2)
-        tax_rate = self._pick(TAX_RATES)
-        tax = round(subtotal * tax_rate, 2)
-        total = round(subtotal + tax, 2)
-        tax_pct = int(tax_rate * 100) if tax_rate * 100 == int(tax_rate * 100) else tax_rate * 100
-
-        items_text = ""
-        for it in items:
-            items_text += f"{it['description']:<30s} {it['quantity']:>5d}    ${it['unit_price']:>10.2f}   ${it['amount']:>10.2f}\n"
-
-        text = f"""INVOICE
-
-Invoice Number: {inv_num}
-Date: {display_date}
-
-From:
-  {vendor[0]}
-  {vendor[1]}
-  {vendor[2]}, {vendor[3]} {vendor[4]}
-
-Bill To:
-  {customer[0]}
-  {customer[1]}
-  {customer[2]}, {customer[3]} {customer[4]}
-
-Description                    Qty    Unit Price      Amount
----------------------------------------------------------------
-{items_text}
-                                      Subtotal:  ${subtotal:,.2f}
-                                      Tax ({tax_pct}%):   ${tax:,.2f}
-                                      Total:     ${total:,.2f}
-
-Payment Terms: Net {self.rng.choice([15, 30, 45, 60])}
-"""
-        ground_truth = {
-            "invoice_number": inv_num,
-            "date": norm_date,
-            "vendor_name": vendor[0],
-            "customer_name": customer[0],
-            "subtotal": subtotal,
-            "tax": tax,
-            "total": total,
-            "line_items": items,
-        }
-        return {"id": f"proc_simple_{self.rng.randint(1000,9999)}", "text": text, "ground_truth": ground_truth}
-
-    def generate_messy(self) -> Dict[str, Any]:
-        base = self.generate_simple()
-        gt = base["ground_truth"]
-        vendor = gt["vendor_name"]
-        customer = gt["customer_name"]
-        items = gt["line_items"]
-
-        abbrevs = {"Subtotal": self._pick(["subtot", "s/t", "sub"]),
-                    "Tax": self._pick(["tx", "tax", "vat"]),
-                    "Total": self._pick(["TOTAL DUE", "amt due", "grand total", "balance"])}
-
-        items_text = ""
-        for it in items:
-            desc_short = it["description"].split("(")[0].strip().lower()
-            qty = it["quantity"]
-            price = it["unit_price"]
-            amt = it["amount"]
-            fmt = self.rng.choice([
-                f"{qty}x {desc_short} @ {price:.0f}           {amt:.0f}",
-                f"{desc_short} -- {qty} @ {price:.2f} ea ........... {amt:.0f}",
-                f"{desc_short}...${amt:.0f}",
-            ])
-            items_text += fmt + "\n"
-
-        text = f"""{vendor.lower()}
-{self._pick(VENDOR_POOL)[2].lower()}, {self._pick(VENDOR_POOL)[3]}
-
-inv# {gt['invoice_number']}
-dt: {gt['date']}
-
-cust: {customer.split('.')[0].split(',')[0].lower()}
-
--- charges --
-{items_text}
-{abbrevs['Subtotal']}: ${gt['subtotal']:.0f}
-{abbrevs['Tax']}: {gt['tax']:.2f}
-========
-{abbrevs['Total']} ${gt['total']:,.2f}
-
-pay within 30 days
-"""
-        return {"id": f"proc_messy_{self.rng.randint(1000,9999)}", "text": text, "ground_truth": gt}
-
-    def _apply_ocr_corruption(self, text: str, intensity: float = 0.15) -> str:
-        result = list(text)
-        for i, ch in enumerate(result):
-            if ch in OCR_SUBSTITUTIONS and self.rng.random() < intensity:
-                result[i] = OCR_SUBSTITUTIONS[ch]
-        return "".join(result)
-
-    def generate_corrupted(self) -> Dict[str, Any]:
-        base = self.generate_simple()
-        corrupted_text = self._apply_ocr_corruption(base["text"], 0.18)
-        header = self._pick([
-            "SC4NNED D0CUMENT - Page 1 of 1\n\n",
-            "[SCAN QUALITY: P00R - SOME CHARACTERS MAY BE lNCORRECT]\n\n",
-            "---FAXED DOCUMENT---\nQUALITY: [####===---] 40%\n\n",
-        ])
-        footer = self._pick([
-            "\n\n--- END 0F SCAN ---",
-            "\n\n[PAGE 1/1 - SCAN C0MPLETE]",
-            "\n\n---END FAX---",
-        ])
-        return {
-            "id": f"proc_corrupt_{self.rng.randint(1000,9999)}",
-            "text": header + corrupted_text + footer,
-            "ground_truth": base["ground_truth"],
-        }
-
-    def generate_multi_document(self) -> Dict[str, Any]:
-        base = self.generate_simple()
-        gt = base["ground_truth"]
-        po_num = f"PO-{self.rng.choice(['A','B','C','D'])}-{self.rng.randint(2024,2025)}-{self.rng.randint(100,999)}"
-        po_date_display, _po_norm = self._gen_date()
-
-        items_po = ""
-        for it in gt["line_items"]:
-            items_po += f"- {it['quantity']}x {it['description']} @ ${it['unit_price']:.2f} = ${it['amount']:.2f}\n"
-
-        credit_amount = round(self._pick(gt["line_items"])["unit_price"] * self.rng.randint(1, 3), 2)
-        credit_tax = round(credit_amount * 0.07, 2)
-        credit_total = round(credit_amount + credit_tax, 2)
-        adjusted_total = round(gt["total"] - credit_total, 2)
-        reason = self._pick([
-            "Defective items returned",
-            "Partial delivery — remaining items backordered",
-            "Pricing error on original invoice",
-            "Duplicate charge for services",
-        ])
-
-        text = f"""=== PURCHASE ORDER ===
-PO Number: {po_num}
-Date: {po_date_display}
-Vendor: {gt['vendor_name']}
-Buyer: {gt['customer_name']}
-
-Ordered Items:
-{items_po}
-PO Total: ${gt['subtotal']:,.2f} (before tax)
-
-=== INVOICE ===
-{base['text']}
-Reference PO: {po_num}
-
-=== CREDIT MEMO ===
-Credit Memo #: CM-{self.rng.randint(2024,2025)}-{self.rng.randint(100,999)}
-Reference Invoice: {gt['invoice_number']}
-Reason: {reason}
-Credit Amount: ${credit_amount:.2f}
-Tax Adjustment: ${credit_tax:.2f}
-Total Credit: -${credit_total:.2f}
-
-=== SUMMARY ===
-Original Invoice: ${gt['total']:,.2f}
-Credit Applied: -${credit_total:.2f}
-Adjusted Balance Due: ${adjusted_total:,.2f}
-"""
-        gt_multi = dict(gt)
-        gt_multi["po_number"] = po_num
-        gt_multi["adjustment_reason"] = reason
-        gt_multi["adjusted_total"] = adjusted_total
-        return {"id": f"proc_multi_{self.rng.randint(1000,9999)}", "text": text, "ground_truth": gt_multi}
-
-    def generate_adversarial(self) -> Dict[str, Any]:
-        base = self.generate_simple()
-        gt = base["ground_truth"]
-        original_subtotal = gt["subtotal"]
-        discount_pct = self._pick([0.05, 0.08, 0.10, 0.12, 0.15])
-        discount_amount = round(original_subtotal * discount_pct, 2)
-        adjusted_subtotal = round(original_subtotal - discount_amount, 2)
-        tax_rate = self._pick(TAX_RATES)
-        new_tax = round(adjusted_subtotal * tax_rate, 2)
-        new_total = round(adjusted_subtotal + new_tax, 2)
-        old_tax = round(original_subtotal * tax_rate, 2)
-        original_total = round(original_subtotal + old_tax, 2)
-
-        draft_inv = f"DRAFT-INV-{self.rng.randint(100,999)}"
-        real_inv = gt["invoice_number"] + self._pick(["-R2", "-FINAL", "-REV1"])
-        po_num = f"PO-{self.rng.randint(2024,2025)}-{self.rng.randint(100,999)}"
-        _, reissue_date = self._gen_date()
-        tax_pct = int(tax_rate * 100) if tax_rate * 100 == int(tax_rate * 100) else round(tax_rate * 100, 1)
-
-        items_text = ""
-        for it in gt["line_items"]:
-            items_text += f"{it['description']:<30s} {it['quantity']:>5d}    ${it['unit_price']:>10.2f}   ${it['amount']:>10.2f}\n"
-
-        discount_pct_display = int(discount_pct * 100) if discount_pct * 100 == int(discount_pct * 100) else round(discount_pct * 100, 1)
-
-        text = f"""INVOICE
-
-*** IMPORTANT: This replaces previous invoice {draft_inv} which was voided ***
-
-Invoice Number: {real_inv}
-Previous Reference: {draft_inv} (VOIDED — DO NOT USE)
-Date: {gt['date']}
-Reissue Date: {reissue_date}
-PO Reference: {po_num}
-
-From:
-  {gt['vendor_name']}
-
-Bill To:
-  {gt['customer_name']}
-
-Description                    Qty    Unit Price      Amount
----------------------------------------------------------------
-{items_text}  ** EARLY PAYMENT DISCOUNT: -{discount_pct_display}% applied **
-
-                                      Subtotal:    ${original_subtotal:,.2f}
-                                 Discount ({discount_pct_display}%):  -${discount_amount:,.2f}
-                            Adjusted Subtotal:   ${adjusted_subtotal:,.2f}
-                                      Tax ({tax_pct}%):    ${new_tax:,.2f}
-                                      Total:       ${new_total:,.2f}
-
-NOTE: Original quote was ${original_total:,.2f} but discount applied.
-
-!!! BUDGET VARIANCE ALERT !!!
-PO Authorized: ${original_subtotal:,.2f}
-Actual (pre-tax): ${adjusted_subtotal:,.2f}
-Variance: -${discount_amount:,.2f} UNDER BUDGET
-
-Payment Terms: Net 10 (discounted) / Net 30 (full price ${original_total:,.2f})
-"""
-        discrepancy = (
-            f"{discount_pct_display}% early payment discount applied. "
-            f"Reissued invoice replaces voided {draft_inv}. "
-            f"Adjusted subtotal ${adjusted_subtotal:,.2f} vs original ${original_subtotal:,.2f}."
+    def _gen_company(self, names: list) -> Company:
+        name = self._pick(names)
+        city, state = self._pick(CITIES)
+        return Company(
+            name=name,
+            address=f"{self.rng.randint(100, 9999)} {self._pick(['Industrial', 'Commerce', 'Innovation', 'Enterprise', 'Technology'])} {self._pick(['Drive', 'Avenue', 'Parkway', 'Boulevard', 'Street'])}",
+            city=city,
+            state=state,
+            zip_code=f"{self.rng.randint(10000, 99999)}",
+            tax_id=f"{self.rng.randint(10, 99)}-{self.rng.randint(1000000, 9999999)}",
         )
 
-        gt_adv = {
-            "invoice_number": real_inv,
-            "date": reissue_date,
-            "vendor_name": gt["vendor_name"],
-            "customer_name": gt["customer_name"],
-            "subtotal": adjusted_subtotal,
-            "tax": new_tax,
-            "total": new_total,
-            "line_items": gt["line_items"],
-            "po_number": po_num,
-            "discount_amount": discount_amount,
-            "original_total": original_total,
-            "discrepancy_notes": discrepancy,
-        }
-        return {"id": f"proc_adv_{self.rng.randint(1000,9999)}", "text": text, "ground_truth": gt_adv}
+    def _gen_date(self, year: int = 2024, month_range: Tuple[int, int] = (1, 12)) -> str:
+        month = self.rng.randint(*month_range)
+        day = self.rng.randint(1, 28)
+        return f"{year}-{month:02d}-{day:02d}"
+
+    def _gen_id(self, prefix: str) -> str:
+        return f"{prefix}-{self.rng.randint(2024, 2025)}-{self.rng.randint(1000, 9999)}"
+
+    def _gen_tracking_id(self) -> str:
+        return f"TRK-{self.rng.randint(10000, 99999)}"
+
+    # ------------------------------------------------------------------
+    # Task 1: Easy — Procurement Reconciliation
+    # ------------------------------------------------------------------
+    def generate_task1(self) -> Scenario:
+        """Generate a simple PO vs Invoice overcharge scenario."""
+        vendor = self._gen_company(VENDOR_NAMES)
+        buyer = self._gen_company(BUYER_NAMES)
+        po_date = self._gen_date(month_range=(1, 6))
+        inv_date = self._gen_date(month_range=(2, 7))
+
+        # Generate 3-5 line items
+        num_items = self.rng.randint(3, 5)
+        products = self.rng.sample(PRODUCT_CATALOG, num_items)
+        discrepant_idx = self.rng.randint(0, num_items - 1)
+
+        line_items = []
+        for i, (name, cat, min_p, max_p) in enumerate(products):
+            qty = self.rng.randint(5, 100)
+            contracted_price = round(self.rng.uniform(min_p, max_p), 2)
+
+            if i == discrepant_idx:
+                # Overcharge: invoice price higher than contracted
+                markup = round(self.rng.uniform(2.00, 15.00), 2)
+                invoiced_price = round(contracted_price + markup, 2)
+                has_discrepancy = True
+            else:
+                invoiced_price = contracted_price
+                has_discrepancy = False
+
+            item_id = f"LI-{self.rng.randint(1000, 9999)}"
+            line_items.append(LineItem(
+                item_id=item_id,
+                description=name,
+                category=cat,
+                quantity=qty,
+                contracted_unit_price=contracted_price,
+                invoiced_unit_price=invoiced_price,
+                contracted_total=round(qty * contracted_price, 2),
+                invoiced_total=round(qty * invoiced_price, 2),
+                has_discrepancy=has_discrepancy,
+            ))
+
+        po_total = round(sum(li.contracted_total for li in line_items), 2)
+        inv_subtotal = round(sum(li.invoiced_total for li in line_items), 2)
+        tax_rate = self._pick([0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
+        tax_amount = round(inv_subtotal * tax_rate, 2)
+        inv_total = round(inv_subtotal + tax_amount, 2)
+
+        po_number = self._gen_id("PO")
+        inv_number = self._gen_id("INV")
+
+        po = PurchaseOrder(
+            po_number=po_number, date=po_date, vendor=vendor, buyer=buyer,
+            line_items=line_items, total_amount=po_total, approved_budget=round(po_total * 1.05, 2),
+        )
+
+        invoice = Invoice(
+            invoice_number=inv_number, date=inv_date, po_reference=po_number,
+            vendor=vendor, buyer=buyer, line_items=line_items,
+            subtotal=inv_subtotal, tax_rate=tax_rate, tax_amount=tax_amount, total=inv_total,
+        )
+
+        discrepant = line_items[discrepant_idx]
+        correct_total = discrepant.contracted_total
+        overcharge = round(discrepant.invoiced_total - correct_total, 2)
+
+        return Scenario(
+            task_name="procurement_reconciliation",
+            seed=self.seed,
+            vendor=vendor, buyer=buyer,
+            purchase_order=po, invoice=invoice,
+            correct_adjustment=-overcharge,  # negative = reduce invoice
+            discrepant_line_item_id=discrepant.item_id,
+            correct_line_item_price=correct_total,
+        )
+
+    # ------------------------------------------------------------------
+    # Task 2: Medium — SLA Enforcement
+    # ------------------------------------------------------------------
+    def generate_task2(self) -> Scenario:
+        """Generate a delayed shipment + SLA penalty scenario."""
+        scenario = self.generate_task1()  # base PO/invoice
+        # Remove the pricing discrepancy for task2 (focus is on shipping)
+        for li in scenario.purchase_order.line_items:
+            li.invoiced_unit_price = li.contracted_unit_price
+            li.invoiced_total = li.contracted_total
+            li.has_discrepancy = False
+
+        # Recalculate invoice
+        inv = scenario.invoice
+        inv_subtotal = round(sum(li.contracted_total for li in inv.line_items), 2)
+        inv.subtotal = inv_subtotal
+        inv.tax_amount = round(inv_subtotal * inv.tax_rate, 2)
+        inv.total = round(inv_subtotal + inv.tax_amount, 2)
+
+        # Generate SLA
+        sla_struct = self._pick(SLA_PENALTY_STRUCTURES).copy()
+        contract_id = self._gen_id("SLA")
+        sla = SLAContract(
+            contract_id=contract_id,
+            vendor=scenario.vendor.name,
+            buyer=scenario.buyer.name,
+            effective_date=self._gen_date(month_range=(1, 3)),
+            penalty_structure=sla_struct,
+            delivery_terms=f"Delivery within 14 business days of PO issuance. Penalties per SLA clause {contract_id}-SEC4.",
+        )
+
+        # Generate shipping delay
+        delay_days = self.rng.randint(2, 12)
+        grace = sla_struct.get("grace_days", 0)
+        tracking_id = self._gen_tracking_id()
+
+        ship_log = ShippingLog(
+            tracking_id=tracking_id,
+            po_reference=scenario.purchase_order.po_number,
+            carrier=self._pick(["FedEx Freight", "UPS Supply Chain", "XPO Logistics", "USPS Priority", "DHL Express"]),
+            ship_date=scenario.purchase_order.date,
+            expected_delivery=self._gen_date(month_range=(3, 5)),
+            actual_delivery=self._gen_date(month_range=(4, 6)),
+            delay_days=delay_days,
+            status="delivered_late",
+        )
+
+        # Calculate penalty
+        penalizable_days = max(0, delay_days - grace)
+        if sla_struct["type"] == "linear":
+            rate = sla_struct["rate_per_day"]
+            cap = sla_struct["cap"]
+            penalty_pct = min(penalizable_days * rate, cap)
+        elif sla_struct["type"] == "tiered":
+            penalty_pct = 0.0
+            remaining = penalizable_days
+            for threshold, rate in sla_struct["tiers"]:
+                if remaining <= 0:
+                    break
+                days_in_tier = min(remaining, threshold)
+                penalty_pct += days_in_tier * rate
+                remaining -= days_in_tier
+            penalty_pct = min(penalty_pct, sla_struct["cap"])
+        else:
+            penalty_pct = 0.0
+
+        penalty_amount = round(inv.subtotal * penalty_pct, 2)
+
+        scenario.task_name = "sla_enforcement"
+        scenario.sla_contract = sla
+        scenario.shipping_log = ship_log
+        scenario.correct_adjustment = -penalty_amount  # deduction from invoice
+        scenario.penalty_amount = penalty_amount
+        scenario.discrepant_line_item_id = None
+        scenario.correct_line_item_price = None
+
+        return scenario
+
+    # ------------------------------------------------------------------
+    # Task 3: Hard — Adversarial Auditing
+    # ------------------------------------------------------------------
+    def generate_task3(self) -> Scenario:
+        """Generate adversarial vendor dispute scenario."""
+        scenario = self.generate_task2()  # has SLA + shipping
+
+        # Generate warehouse logs proving dock was open during disputed window
+        delivery_date = scenario.shipping_log.actual_delivery
+        warehouse_logs = []
+        for i in range(-1, 3):  # day before through 2 days after
+            # Parse date for log entries
+            log_date = delivery_date  # simplified: use actual delivery date
+            warehouse_logs.append(WarehouseLog(
+                date=log_date,
+                dock_id=f"DOCK-{self._pick(['A', 'B', 'C'])}{self.rng.randint(1, 5)}",
+                status="open",
+                staff_on_duty=self.rng.randint(3, 8),
+                shipments_received=self.rng.randint(5, 20),
+                notes=f"Normal operations. {self.rng.randint(5, 20)} deliveries processed.",
+            ))
+
+        scenario.task_name = "adversarial_auditing"
+        scenario.warehouse_logs = warehouse_logs
+        scenario.vendor_claim_valid = False  # vendor's claim is always invalid in this task
+
+        return scenario
+
+
+# ---------------------------------------------------------------------------
+# Document renderers — produce human-readable text from data structures
+# ---------------------------------------------------------------------------
+
+def render_purchase_order(po: PurchaseOrder) -> str:
+    lines = [
+        "═══════════════════════════════════════════",
+        "              PURCHASE ORDER",
+        "═══════════════════════════════════════════",
+        f"PO Number:       {po.po_number}",
+        f"Date:            {po.date}",
+        f"Approved Budget: ${po.approved_budget:,.2f}",
+        "",
+        f"Vendor:  {po.vendor.name}",
+        f"         {po.vendor.address}",
+        f"         {po.vendor.city}, {po.vendor.state} {po.vendor.zip_code}",
+        "",
+        f"Buyer:   {po.buyer.name}",
+        f"         {po.buyer.address}",
+        f"         {po.buyer.city}, {po.buyer.state} {po.buyer.zip_code}",
+        "",
+        "Line Items:",
+        f"{'ID':<12} {'Description':<40} {'Qty':>5} {'Unit Price':>12} {'Total':>12}",
+        "─" * 85,
+    ]
+    for li in po.line_items:
+        lines.append(
+            f"{li.item_id:<12} {li.description:<40} {li.quantity:>5} "
+            f"${li.contracted_unit_price:>10,.2f} ${li.contracted_total:>10,.2f}"
+        )
+    lines.extend([
+        "─" * 85,
+        f"{'PO Total:':>71} ${po.total_amount:>10,.2f}",
+        "═══════════════════════════════════════════",
+    ])
+    return "\n".join(lines)
+
+
+def render_invoice(inv: Invoice) -> str:
+    tax_pct = f"{inv.tax_rate * 100:.1f}"
+    lines = [
+        "═══════════════════════════════════════════",
+        "                INVOICE",
+        "═══════════════════════════════════════════",
+        f"Invoice Number:  {inv.invoice_number}",
+        f"Date:            {inv.date}",
+        f"PO Reference:    {inv.po_reference}",
+        "",
+        f"From:    {inv.vendor.name}",
+        f"         {inv.vendor.address}",
+        f"         {inv.vendor.city}, {inv.vendor.state} {inv.vendor.zip_code}",
+        f"         Tax ID: {inv.vendor.tax_id}",
+        "",
+        f"Bill To: {inv.buyer.name}",
+        f"         {inv.buyer.address}",
+        f"         {inv.buyer.city}, {inv.buyer.state} {inv.buyer.zip_code}",
+        "",
+        f"{'ID':<12} {'Description':<40} {'Qty':>5} {'Unit Price':>12} {'Amount':>12}",
+        "─" * 85,
+    ]
+    for li in inv.line_items:
+        lines.append(
+            f"{li.item_id:<12} {li.description:<40} {li.quantity:>5} "
+            f"${li.invoiced_unit_price:>10,.2f} ${li.invoiced_total:>10,.2f}"
+        )
+    lines.extend([
+        "─" * 85,
+        f"{'Subtotal:':>71} ${inv.subtotal:>10,.2f}",
+        f"{'Tax (' + tax_pct + '%):':>71} ${inv.tax_amount:>10,.2f}",
+        f"{'TOTAL DUE:':>71} ${inv.total:>10,.2f}",
+        "═══════════════════════════════════════════",
+    ])
+    return "\n".join(lines)
+
+
+def render_sla(sla: SLAContract) -> str:
+    ps = sla.penalty_structure
+    lines = [
+        "═══════════════════════════════════════════",
+        "         SERVICE LEVEL AGREEMENT",
+        "═══════════════════════════════════════════",
+        f"Contract ID:     {sla.contract_id}",
+        f"Effective Date:  {sla.effective_date}",
+        f"Vendor:          {sla.vendor}",
+        f"Buyer:           {sla.buyer}",
+        "",
+        f"Delivery Terms:  {sla.delivery_terms}",
+        "",
+        "LATE DELIVERY PENALTY CLAUSE:",
+    ]
+    if ps["type"] == "linear":
+        lines.append(f"  - Penalty rate: {ps['rate_per_day'] * 100:.1f}% of invoice subtotal per day late")
+        lines.append(f"  - Maximum penalty cap: {ps['cap'] * 100:.0f}% of invoice subtotal")
+        if ps["grace_days"] > 0:
+            lines.append(f"  - Grace period: {ps['grace_days']} business day(s)")
+    elif ps["type"] == "tiered":
+        lines.append("  - Tiered penalty structure:")
+        prev = 0
+        for threshold, rate in ps["tiers"]:
+            if threshold >= 999:
+                lines.append(f"    Day {prev + 1}+: {rate * 100:.1f}% per day")
+            else:
+                lines.append(f"    Days {prev + 1}-{threshold}: {rate * 100:.1f}% per day")
+            prev = threshold
+        lines.append(f"  - Maximum penalty cap: {ps['cap'] * 100:.0f}% of invoice subtotal")
+    lines.append("═══════════════════════════════════════════")
+    return "\n".join(lines)
+
+
+def render_shipping_log(log: ShippingLog) -> str:
+    return "\n".join([
+        "═══════════════════════════════════════════",
+        "            SHIPPING LOG",
+        "═══════════════════════════════════════════",
+        f"Tracking ID:        {log.tracking_id}",
+        f"PO Reference:       {log.po_reference}",
+        f"Carrier:            {log.carrier}",
+        f"Ship Date:          {log.ship_date}",
+        f"Expected Delivery:  {log.expected_delivery}",
+        f"Actual Delivery:    {log.actual_delivery}",
+        f"Delay:              {log.delay_days} day(s)",
+        f"Status:             {log.status}",
+        "═══════════════════════════════════════════",
+    ])
+
+
+def render_warehouse_logs(logs: List[WarehouseLog]) -> str:
+    lines = [
+        "═══════════════════════════════════════════",
+        "         WAREHOUSE ACCESS LOGS",
+        "═══════════════════════════════════════════",
+    ]
+    for wl in logs:
+        lines.extend([
+            f"Date: {wl.date}  |  Dock: {wl.dock_id}  |  Status: {wl.status.upper()}",
+            f"  Staff on duty: {wl.staff_on_duty}  |  Shipments received: {wl.shipments_received}",
+            f"  Notes: {wl.notes}",
+            "",
+        ])
+    lines.append("═══════════════════════════════════════════")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-GENERATORS = {
-    "simple_invoice": "generate_simple",
-    "messy_invoice": "generate_messy",
-    "multi_document": "generate_multi_document",
-    "corrupted_scan": "generate_corrupted",
-    "adversarial_invoice": "generate_adversarial",
+TASK_GENERATORS = {
+    "procurement_reconciliation": "generate_task1",
+    "sla_enforcement": "generate_task2",
+    "adversarial_auditing": "generate_task3",
+}
+
+VALID_TASKS = list(TASK_GENERATORS.keys())
+
+MAX_STEPS = {
+    "procurement_reconciliation": 10,
+    "sla_enforcement": 15,
+    "adversarial_auditing": 20,
 }
 
 
-def generate_document(task_name: str, seed: int = 0) -> Dict[str, Any]:
-    """Generate a procedural document for the given task and seed."""
+def generate_scenario(task_name: str, seed: int = 0) -> Scenario:
+    """Generate a complete ESCTR scenario for the given task and seed."""
     engine = ProceduralEngine(seed)
-    method = GENERATORS.get(task_name, "generate_simple")
+    method = TASK_GENERATORS.get(task_name, "generate_task1")
     return getattr(engine, method)()

@@ -1,23 +1,20 @@
 spec_version: 1
-name: invoice_extraction_env
+name: esctr_environment
 type: space
 runtime: fastapi
 app: server.app:app
 port: 7860
 
 tasks:
-  - name: simple_invoice
+  - name: procurement_reconciliation
     difficulty: easy
-    description: "Clean, well-formatted invoices with clear field labels"
-  - name: messy_invoice
+    max_steps: 10
+    description: "Identify overcharged line items between PO and Invoice, calculate exact overcharge"
+  - name: sla_enforcement
     difficulty: medium
-    description: "Messy invoices with abbreviations, typos, and non-standard layouts"
-  - name: multi_document
+    max_steps: 15
+    description: "Calculate late delivery penalties from shipping logs and SLA contract terms"
+  - name: adversarial_auditing
     difficulty: hard
-    description: "Multi-section documents requiring cross-referencing PO, invoice, and credit memos"
-  - name: corrupted_scan
-    difficulty: very_hard
-    description: "OCR-scanned invoices with systematic character errors"
-  - name: adversarial_invoice
-    difficulty: expert
-    description: "Adversarial documents with decoy fields, hidden calculations, and contradictions"
+    max_steps: 20
+    description: "Navigate vendor disputes, verify warehouse logs, reject settlements, enforce full penalties"

@@ -1,8 +1,8 @@
 """
-FastAPI application for the Invoice Extraction Environment.
+FastAPI application for the ESCTR Environment.
 
-Exposes the environment over HTTP and WebSocket endpoints
-compatible with the OpenEnv client protocol.
+Exposes the Enterprise Supply Chain & Tax Reconciliation environment
+over HTTP and WebSocket endpoints compatible with the OpenEnv spec.
 """
 
 import json
@@ -13,20 +13,20 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .models import InvoiceAction, InvoiceObservation, InvoiceState
-from .environment import InvoiceExtractionEnvironment
+from .models import ESCTRAction, ESCTRObservation, ESCTRState
+from .environment import ESCTREnvironment
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Request / Response models (OpenEnv-compatible)
+# Request / Response models
 # ---------------------------------------------------------------------------
 
 class ResetRequest(BaseModel):
     seed: Optional[int] = None
     episode_id: Optional[str] = None
-    task_name: str = "simple_invoice"
+    task_name: str = "procurement_reconciliation"
 
     class Config:
         extra = "allow"
@@ -48,14 +48,13 @@ class HealthResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _obs_to_response(obs: InvoiceObservation) -> dict:
-    """Convert an InvoiceObservation to a step/reset response dict."""
+def _obs_to_response(obs: ESCTRObservation) -> dict:
     obs_dict = obs.model_dump()
-    reward = obs_dict.pop("reward", None)
+    reward = obs_dict.pop("reward", 0.0)
     done = obs_dict.pop("done", False)
     return {
         "observation": obs_dict,
-        "reward": reward if reward is not None else 0.0,
+        "reward": reward,
         "done": done,
     }
 
@@ -64,19 +63,19 @@ def _obs_to_response(obs: InvoiceObservation) -> dict:
 # Application factory
 # ---------------------------------------------------------------------------
 
-def create_invoice_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
-
+def create_app() -> FastAPI:
     app = FastAPI(
-        title="Invoice Extraction Environment",
-        description="OpenEnv environment for extracting structured data from invoices",
-        version="0.1.0",
+        title="ESCTR Environment",
+        description=(
+            "Enterprise Supply Chain & Tax Reconciliation — an OpenEnv environment "
+            "for training LLMs to investigate discrepancies, enforce SLA penalties, "
+            "and navigate adversarial vendor disputes."
+        ),
+        version="1.0.0",
     )
 
-    # Global environment instance for HTTP endpoints
-    _env = InvoiceExtractionEnvironment()
+    _env = ESCTREnvironment()
 
-    # === Health check ===
     @app.get("/health")
     def health():
         return HealthResponse()
@@ -84,24 +83,22 @@ def create_invoice_app() -> FastAPI:
     @app.get("/")
     def root():
         return {
-            "name": "invoice_extraction_env",
-            "version": "0.1.0",
+            "name": "esctr_environment",
+            "version": "1.0.0",
             "status": "running",
-            "endpoints": ["/health", "/reset", "/step", "/state", "/schema", "/ws"],
+            "endpoints": ["/health", "/reset", "/step", "/state", "/schema", "/metadata", "/ws"],
         }
 
-    # === Reset ===
     @app.post("/reset")
     def reset(request: ResetRequest = ResetRequest()):
         kwargs = request.model_dump(exclude_unset=True)
         obs = _env.reset(**kwargs)
         return _obs_to_response(obs)
 
-    # === Step ===
     @app.post("/step")
     def step(request: StepRequest):
         try:
-            action = InvoiceAction(**request.action)
+            action = ESCTRAction(**request.action)
         except Exception as e:
             return JSONResponse(
                 status_code=422,
@@ -110,58 +107,52 @@ def create_invoice_app() -> FastAPI:
         obs = _env.step(action, timeout_s=request.timeout_s)
         return _obs_to_response(obs)
 
-    # === State ===
     @app.get("/state")
     def get_state():
         return _env.state.model_dump()
 
-    # === Schema ===
     @app.get("/schema")
     def get_schema():
         return {
-            "action": InvoiceAction.model_json_schema(),
-            "observation": InvoiceObservation.model_json_schema(),
-            "state": InvoiceState.model_json_schema(),
+            "action": ESCTRAction.model_json_schema(),
+            "observation": ESCTRObservation.model_json_schema(),
+            "state": ESCTRState.model_json_schema(),
         }
 
-    # === Metadata ===
     @app.get("/metadata")
     def get_metadata():
         return {
-            "name": "invoice_extraction_env",
+            "name": "esctr_environment",
             "description": (
-                "An environment for extracting structured data from unstructured "
-                "invoice and receipt documents. Features 5 difficulty tiers from "
-                "clean invoices to adversarial documents with decoy fields, OCR "
-                "corruption, and hidden calculations. Includes procedural document "
-                "generation for infinite training configurations, RLVR-inspired "
-                "composite reward architecture with trajectory milestones, and "
-                "multi-tool agentic workflow for complex tasks."
+                "Enterprise Supply Chain & Tax Reconciliation: an environment where "
+                "an LLM agent operates as an autonomous financial controller, investigating "
+                "procurement discrepancies, enforcing SLA penalties from shipping delays, "
+                "and navigating adversarial vendor disputes. Features procedural generation "
+                "for infinite scenarios, RLVR composite rewards, and multi-tool agentic workflow."
             ),
-            "version": "0.3.0",
-            "features": [
-                "procedural_document_generation",
-                "rlvr_composite_rewards",
-                "multi_tool_workflow",
-                "weighted_field_scoring",
-                "cross_field_verification",
+            "version": "1.0.0",
+            "themes": [
+                "World Modeling — Professional Tasks",
+                "Long-Horizon Planning & Instruction Following",
+                "Multi-Agent Interactions (adversarial vendor)",
             ],
             "tasks": [
-                {"name": "simple_invoice", "difficulty": "easy", "attempts": 3},
-                {"name": "messy_invoice", "difficulty": "medium", "attempts": 3},
-                {"name": "multi_document", "difficulty": "hard", "attempts": 5,
-                 "tools": ["query_related_documents", "verify_calculations", "check_discrepancies"]},
-                {"name": "corrupted_scan", "difficulty": "very_hard", "attempts": 4},
-                {"name": "adversarial_invoice", "difficulty": "expert", "attempts": 6,
-                 "tools": ["query_related_documents", "verify_calculations", "check_discrepancies"]},
+                {"name": "procurement_reconciliation", "difficulty": "easy", "max_steps": 10,
+                 "description": "Identify overcharged line items between PO and Invoice"},
+                {"name": "sla_enforcement", "difficulty": "medium", "max_steps": 15,
+                 "description": "Calculate late delivery penalties from shipping logs and SLA contracts"},
+                {"name": "adversarial_auditing", "difficulty": "hard", "max_steps": 20,
+                 "description": "Navigate vendor disputes, verify warehouse logs, reject settlement offers"},
+            ],
+            "tools": [
+                "query_database", "read_document", "communicate_vendor", "submit_financial_decision",
             ],
         }
 
-    # === WebSocket (for persistent sessions) ===
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         await websocket.accept()
-        ws_env = InvoiceExtractionEnvironment()
+        ws_env = ESCTREnvironment()
         logger.info("WebSocket session opened")
 
         try:
@@ -181,19 +172,13 @@ def create_invoice_app() -> FastAPI:
 
                 if msg_type == "reset":
                     obs = ws_env.reset(**msg_data)
-                    await websocket.send_json({
-                        "type": "observation",
-                        "data": _obs_to_response(obs),
-                    })
+                    await websocket.send_json({"type": "observation", "data": _obs_to_response(obs)})
 
                 elif msg_type == "step":
                     try:
-                        action = InvoiceAction(**msg_data)
+                        action = ESCTRAction(**msg_data)
                         obs = ws_env.step(action)
-                        await websocket.send_json({
-                            "type": "observation",
-                            "data": _obs_to_response(obs),
-                        })
+                        await websocket.send_json({"type": "observation", "data": _obs_to_response(obs)})
                     except Exception as e:
                         await websocket.send_json({
                             "type": "error",
@@ -201,10 +186,7 @@ def create_invoice_app() -> FastAPI:
                         })
 
                 elif msg_type == "state":
-                    await websocket.send_json({
-                        "type": "state",
-                        "data": ws_env.state.model_dump(),
-                    })
+                    await websocket.send_json({"type": "state", "data": ws_env.state.model_dump()})
 
                 elif msg_type == "close":
                     break
@@ -212,10 +194,7 @@ def create_invoice_app() -> FastAPI:
                 else:
                     await websocket.send_json({
                         "type": "error",
-                        "data": {
-                            "message": f"Unknown message type: {msg_type}",
-                            "code": "UNKNOWN_TYPE",
-                        },
+                        "data": {"message": f"Unknown message type: {msg_type}", "code": "UNKNOWN_TYPE"},
                     })
 
         except WebSocketDisconnect:
@@ -229,12 +208,10 @@ def create_invoice_app() -> FastAPI:
     return app
 
 
-# Create the app instance
-app = create_invoice_app()
+app = create_app()
 
 
 def main():
-    """Entry point for `uv run server` / `[project.scripts]`."""
     import uvicorn
     uvicorn.run("server.app:app", host="0.0.0.0", port=7860)
 

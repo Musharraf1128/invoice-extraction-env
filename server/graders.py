@@ -1,313 +1,291 @@
 """
-Grading logic for the Invoice Extraction Environment.
+Deterministic Graders for the ESCTR Environment.
 
-Provides field-level scoring with fuzzy matching for text fields
-and exact matching for numeric/date fields. All scores are in [0.0, 1.0].
+Each task has a specific grader that scores the agent's performance
+using verifiable, programmatic criteria — no subjective evaluation.
+
+Scoring is always in the strict range (0.01, 0.99) to satisfy OpenEnv validators.
 """
 
-import json
-import re
-from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
+
+from .procedural import Scenario
 
 
-def normalize_text(text: str) -> str:
-    """Normalize text for comparison: lowercase, strip, collapse whitespace."""
-    if not isinstance(text, str):
-        text = str(text)
-    text = text.lower().strip()
-    text = re.sub(r"\s+", " ", text)
-    # Remove common punctuation variations
-    text = text.replace(".", "").replace(",", "").replace("'", "").replace('"', "")
-    return text
+def clamp_score(score: float) -> float:
+    """Clamp score to strict (0.01, 0.99) range."""
+    return round(max(0.01, min(0.99, score)), 4)
 
 
-def normalize_number(value: Any) -> Optional[float]:
-    """Normalize a numeric value: strip currency symbols, parse to float."""
-    if isinstance(value, (int, float)):
-        return round(float(value), 2)
-    if isinstance(value, str):
-        # Remove currency symbols, commas, whitespace
-        cleaned = re.sub(r"[$ ,]", "", value.strip())
-        try:
-            return round(float(cleaned), 2)
-        except (ValueError, TypeError):
-            return None
-    return None
+# ---------------------------------------------------------------------------
+# Task 1: Procurement Reconciliation
+# ---------------------------------------------------------------------------
 
-
-def normalize_date(date_str: str) -> Optional[str]:
-    """Normalize date to YYYY-MM-DD format."""
-    if not isinstance(date_str, str):
-        return None
-
-    date_str = date_str.strip()
-
-    # Already in YYYY-MM-DD
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
-        return date_str
-
-    # MM/DD/YYYY
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", date_str)
-    if m:
-        return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
-
-    # DD-Mon-YYYY or Mon DD, YYYY etc - try common patterns
-    month_map = {
-        "jan": "01", "january": "01", "feb": "02", "february": "02",
-        "mar": "03", "march": "03", "apr": "04", "april": "04",
-        "may": "05", "jun": "06", "june": "06", "jul": "07", "july": "07",
-        "aug": "08", "august": "08", "sep": "09", "september": "09",
-        "oct": "10", "october": "10", "nov": "11", "november": "11",
-        "dec": "12", "december": "12",
-    }
-
-    # "January 15, 2024" or "Jan 15 2024"
-    m = re.match(r"(\w+)\s+(\d{1,2}),?\s*'?(\d{2,4})$", date_str, re.IGNORECASE)
-    if m:
-        month = month_map.get(m.group(1).lower())
-        if month:
-            year = m.group(3)
-            if len(year) == 2:
-                year = "20" + year
-            return f"{year}-{month}-{int(m.group(2)):02d}"
-
-    # "15-Feb-2024" or "20-Feb-2024"
-    m = re.match(r"(\d{1,2})-(\w+)-(\d{4})$", date_str, re.IGNORECASE)
-    if m:
-        month = month_map.get(m.group(2).lower())
-        if month:
-            return f"{m.group(3)}-{month}-{int(m.group(1)):02d}"
-
-    return date_str  # Return as-is if no pattern matches
-
-
-def grade_text(actual: Any, expected: Any) -> float:
-    """Grade a text field using fuzzy matching. Returns 0.0-1.0."""
-    if actual is None or expected is None:
-        return 0.0 if actual != expected else 1.0
-
-    norm_actual = normalize_text(str(actual))
-    norm_expected = normalize_text(str(expected))
-
-    if norm_actual == norm_expected:
-        return 1.0
-
-    # Use SequenceMatcher for fuzzy comparison
-    ratio = SequenceMatcher(None, norm_actual, norm_expected).ratio()
-
-    # Apply a threshold: below 0.4 similarity = 0 score
-    if ratio < 0.4:
-        return 0.0
-
-    return round(ratio, 4)
-
-
-def grade_numeric(actual: Any, expected: Any) -> float:
-    """Grade a numeric field. Returns 1.0 for exact match, partial for close."""
-    norm_actual = normalize_number(actual)
-    norm_expected = normalize_number(expected)
-
-    if norm_actual is None or norm_expected is None:
-        return 0.0
-
-    if norm_actual == norm_expected:
-        return 1.0
-
-    # Partial credit for being close (within 5%)
-    if norm_expected != 0:
-        error_pct = abs(norm_actual - norm_expected) / abs(norm_expected)
-        if error_pct <= 0.01:
-            return 0.9  # Very close
-        elif error_pct <= 0.05:
-            return 0.5  # Somewhat close
-        elif error_pct <= 0.10:
-            return 0.2  # In the ballpark
-
-    return 0.0
-
-
-def grade_date(actual: Any, expected: Any) -> float:
-    """Grade a date field after normalization. Returns 0.0 or 1.0."""
-    if actual is None:
-        return 0.0
-
-    norm_actual = normalize_date(str(actual))
-    norm_expected = normalize_date(str(expected))
-
-    if norm_actual == norm_expected:
-        return 1.0
-
-    # Partial credit for getting the right date with wrong format
-    if norm_actual and norm_expected:
-        # Remove separators and compare
-        a = re.sub(r"[^0-9]", "", norm_actual)
-        e = re.sub(r"[^0-9]", "", norm_expected)
-        if a == e:
-            return 0.8
-
-    return 0.0
-
-
-def grade_line_items(actual: Any, expected: Any) -> float:
-    """Grade line items extraction. Checks description, qty, price, amount."""
-    if not isinstance(actual, list) or not isinstance(expected, list):
-        return 0.0
-
-    if len(actual) == 0:
-        return 0.0
-
-    total_score = 0.0
-    matched_expected = set()
-
-    for act_item in actual:
-        if not isinstance(act_item, dict):
-            continue
-
-        best_score = 0.0
-        best_idx = -1
-
-        for idx, exp_item in enumerate(expected):
-            if idx in matched_expected:
-                continue
-            if not isinstance(exp_item, dict):
-                continue
-
-            # Score each field of the line item
-            desc_score = grade_text(
-                act_item.get("description", ""),
-                exp_item.get("description", ""),
-            )
-            qty_score = grade_numeric(
-                act_item.get("quantity"),
-                exp_item.get("quantity"),
-            )
-            price_score = grade_numeric(
-                act_item.get("unit_price"),
-                exp_item.get("unit_price"),
-            )
-            amt_score = grade_numeric(
-                act_item.get("amount"),
-                exp_item.get("amount"),
-            )
-
-            item_score = (desc_score * 0.3 + qty_score * 0.2 +
-                          price_score * 0.2 + amt_score * 0.3)
-
-            if item_score > best_score:
-                best_score = item_score
-                best_idx = idx
-
-        if best_idx >= 0:
-            matched_expected.add(best_idx)
-            total_score += best_score
-
-    # Normalize by expected count, penalize missing/extra items
-    expected_count = len(expected)
-    if expected_count == 0:
-        return 1.0 if len(actual) == 0 else 0.0
-
-    # Score = matched items score / expected count
-    # Penalize for extra items (max penalty = 0.2)
-    extra_penalty = max(0, len(actual) - expected_count) * 0.05
-    extra_penalty = min(extra_penalty, 0.2)
-
-    score = (total_score / expected_count) - extra_penalty
-    return max(0.0, min(1.0, round(score, 4)))
-
-
-def grade_extraction(
-    extracted: Dict[str, Any],
-    ground_truth: Dict[str, Any],
-    required_fields: List[str],
+def grade_task1(
+    scenario: Scenario,
+    submitted_amount: float,
+    submitted_line_item: str = None,
+    milestones: List[str] = None,
+    steps_taken: int = 0,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Grade the full extraction against ground truth.
+    """Grade the procurement reconciliation task.
 
-    Uses weighted scoring: financial fields (subtotal, tax, total) are
-    weighted 1.5x, line_items 2.0x, and reasoning fields 0.8x to reflect
-    their relative importance in real-world invoice processing.
+    Perfect score requires:
+    - Correct discrepant line item identified
+    - Exact adjustment amount (overcharge value, negative)
 
-    Args:
-        extracted: The agent's extracted fields
-        ground_truth: The correct field values
-        required_fields: List of field names to grade
-
-    Returns:
-        Tuple of (overall_score, field_feedback)
-        overall_score is in [0.0, 1.0]
-        field_feedback maps field names to {score, expected, actual}
+    Partial credit:
+    - Correct line item but wrong amount → 0.5
+    - Wrong line item → 0.0 outcome
     """
-    field_scores = {}
-    feedback = {}
+    milestones = milestones or []
+    feedback = {"task": "procurement_reconciliation"}
 
-    numeric_fields = {"total", "subtotal", "tax", "adjusted_total",
-                       "discount_amount", "original_total"}
-    date_fields = {"date", "due_date"}
-    list_fields = {"line_items"}
-    # Free-text reasoning fields — graded with lower threshold
-    reasoning_fields = {"discrepancy_notes", "adjustment_reason"}
+    # Outcome scoring (weight: 0.70)
+    correct_amount = scenario.correct_adjustment
+    correct_item = scenario.discrepant_line_item_id
 
-    # Field importance weights for weighted average
-    field_weights = {
-        "subtotal": 1.5, "tax": 1.5, "total": 1.5,
-        "adjusted_total": 1.5, "discount_amount": 1.2, "original_total": 1.2,
-        "line_items": 2.0,
-        "discrepancy_notes": 0.8, "adjustment_reason": 0.8,
-    }
+    outcome_score = 0.0
+    item_correct = (submitted_line_item == correct_item) if submitted_line_item and correct_item else False
+    amount_correct = abs(submitted_amount - correct_amount) < 0.02 if submitted_amount is not None else False
 
-    for field in required_fields:
-        expected = ground_truth.get(field)
-        actual = extracted.get(field)
+    if item_correct and amount_correct:
+        outcome_score = 1.0
+        feedback["outcome"] = "PERFECT — correct line item and exact adjustment amount"
+    elif item_correct and not amount_correct:
+        outcome_score = 0.5
+        feedback["outcome"] = f"PARTIAL — correct line item but wrong amount (expected {correct_amount:.2f}, got {submitted_amount:.2f})"
+    elif not item_correct and amount_correct:
+        outcome_score = 0.4
+        feedback["outcome"] = f"PARTIAL — correct amount but wrong line item (expected {correct_item})"
+    else:
+        outcome_score = 0.0
+        feedback["outcome"] = "FAIL — wrong line item and wrong amount"
 
-        if field in list_fields:
-            score = grade_line_items(actual, expected)
-        elif field in numeric_fields:
-            score = grade_numeric(actual, expected)
-        elif field in date_fields:
-            score = grade_date(actual, expected)
-        elif field in reasoning_fields:
-            # Free-text reasoning: use fuzzy matching with generous partial credit
-            score = grade_text(actual, expected)
+    # Trajectory scoring (weight: 0.30)
+    trajectory_score = 0.0
+    trajectory_details = []
+    if "retrieved_po" in milestones:
+        trajectory_score += 0.4
+        trajectory_details.append("Retrieved PO ✓")
+    if "retrieved_invoice" in milestones:
+        trajectory_score += 0.4
+        trajectory_details.append("Retrieved Invoice ✓")
+    if "compared_documents" in milestones:
+        trajectory_score += 0.2
+        trajectory_details.append("Compared documents ✓")
+
+    trajectory_score = min(1.0, trajectory_score)
+    feedback["trajectory"] = trajectory_details
+
+    # Efficiency penalty
+    max_steps = 10
+    efficiency_penalty = max(0, (steps_taken - max_steps) * 0.02)
+
+    # Composite
+    alpha, beta = 0.70, 0.30
+    raw_score = alpha * outcome_score + beta * trajectory_score - efficiency_penalty
+    final_score = clamp_score(raw_score)
+
+    feedback["outcome_score"] = outcome_score
+    feedback["trajectory_score"] = trajectory_score
+    feedback["efficiency_penalty"] = efficiency_penalty
+    feedback["final_score"] = final_score
+    feedback["correct_adjustment"] = correct_amount
+    feedback["correct_line_item"] = correct_item
+
+    return final_score, feedback
+
+
+# ---------------------------------------------------------------------------
+# Task 2: SLA Enforcement
+# ---------------------------------------------------------------------------
+
+def grade_task2(
+    scenario: Scenario,
+    submitted_amount: float,
+    milestones: List[str] = None,
+    steps_taken: int = 0,
+) -> Tuple[float, Dict[str, Any]]:
+    """Grade the SLA enforcement task.
+
+    Perfect score requires:
+    - Exact penalty amount calculated from shipping delay + SLA terms
+
+    Partial credit:
+    - Within 5% of correct penalty → 0.7
+    - Within 10% → 0.4
+    - Approved invoice without penalty → 0.0
+    """
+    milestones = milestones or []
+    feedback = {"task": "sla_enforcement"}
+
+    correct_penalty = scenario.penalty_amount or 0.0
+    correct_adjustment = scenario.correct_adjustment  # negative
+
+    # Outcome scoring (weight: 0.60)
+    outcome_score = 0.0
+    if submitted_amount is not None and correct_adjustment != 0:
+        error = abs(submitted_amount - correct_adjustment)
+        error_pct = error / abs(correct_adjustment) if correct_adjustment != 0 else float('inf')
+
+        if error < 0.02:
+            outcome_score = 1.0
+            feedback["outcome"] = "PERFECT — exact penalty amount"
+        elif error_pct <= 0.05:
+            outcome_score = 0.7
+            feedback["outcome"] = f"CLOSE — within 5% (expected {correct_adjustment:.2f}, got {submitted_amount:.2f})"
+        elif error_pct <= 0.10:
+            outcome_score = 0.4
+            feedback["outcome"] = f"PARTIAL — within 10% (expected {correct_adjustment:.2f}, got {submitted_amount:.2f})"
         else:
-            score = grade_text(actual, expected)
+            outcome_score = 0.1
+            feedback["outcome"] = f"INCORRECT — expected {correct_adjustment:.2f}, got {submitted_amount:.2f}"
+    elif submitted_amount == 0 or submitted_amount is None:
+        outcome_score = 0.0
+        feedback["outcome"] = "FAIL — approved invoice without applying penalty"
 
-        field_scores[field] = score
-        feedback[field] = {
-            "score": score,
-            "expected_type": "list" if field in list_fields else
-                            "number" if field in numeric_fields else
-                            "date" if field in date_fields else
-                            "reasoning" if field in reasoning_fields else "text",
-            "matched": score >= 0.5 if field in reasoning_fields else score >= 0.8,
-        }
+    # Trajectory scoring (weight: 0.40)
+    trajectory_score = 0.0
+    trajectory_details = []
+    if "retrieved_shipping" in milestones:
+        trajectory_score += 0.30
+        trajectory_details.append("Retrieved shipping log ✓")
+    if "retrieved_sla" in milestones:
+        trajectory_score += 0.30
+        trajectory_details.append("Retrieved SLA contract ✓")
+    if "retrieved_po" in milestones:
+        trajectory_score += 0.15
+        trajectory_details.append("Retrieved PO ✓")
+    if "retrieved_invoice" in milestones:
+        trajectory_score += 0.15
+        trajectory_details.append("Retrieved Invoice ✓")
+    if "calculated_penalty" in milestones:
+        trajectory_score += 0.10
+        trajectory_details.append("Performed penalty calculation ✓")
 
-    # Weighted average
-    if not field_scores:
-        return 0.01, feedback
+    trajectory_score = min(1.0, trajectory_score)
+    feedback["trajectory"] = trajectory_details
 
-    weighted_sum = 0.0
-    weight_total = 0.0
-    for field, score in field_scores.items():
-        w = field_weights.get(field, 1.0)
-        weighted_sum += score * w
-        weight_total += w
+    # Efficiency
+    max_steps = 15
+    efficiency_penalty = max(0, (steps_taken - max_steps) * 0.02)
 
-    overall = weighted_sum / weight_total if weight_total > 0 else 0.0
+    alpha, beta = 0.60, 0.40
+    raw_score = alpha * outcome_score + beta * trajectory_score - efficiency_penalty
+    final_score = clamp_score(raw_score)
 
-    # Cross-field arithmetic verification bonus
-    gt_sub = ground_truth.get("subtotal")
-    gt_tax = ground_truth.get("tax")
-    gt_total = ground_truth.get("total")
-    if gt_sub is not None and gt_tax is not None and gt_total is not None:
-        ext_sub = normalize_number(extracted.get("subtotal"))
-        ext_tax = normalize_number(extracted.get("tax"))
-        ext_total = normalize_number(extracted.get("total"))
-        if ext_sub is not None and ext_tax is not None and ext_total is not None:
-            computed = round(ext_sub + ext_tax, 2)
-            if abs(computed - ext_total) < 0.02:
-                overall += 0.02  # Arithmetic consistency bonus built into grader
+    feedback["outcome_score"] = outcome_score
+    feedback["trajectory_score"] = trajectory_score
+    feedback["efficiency_penalty"] = efficiency_penalty
+    feedback["final_score"] = final_score
+    feedback["correct_adjustment"] = correct_adjustment
+    feedback["penalty_amount"] = correct_penalty
 
-    # Clamp to strict (0, 1) — validator rejects exactly 0.0 or 1.0
-    overall = round(max(0.01, min(0.99, overall)), 4)
+    return final_score, feedback
 
-    return overall, feedback
+
+# ---------------------------------------------------------------------------
+# Task 3: Adversarial Auditing
+# ---------------------------------------------------------------------------
+
+def grade_task3(
+    scenario: Scenario,
+    submitted_amount: float,
+    rejected_settlement: bool = False,
+    cited_evidence: bool = False,
+    milestones: List[str] = None,
+    steps_taken: int = 0,
+) -> Tuple[float, Dict[str, Any]]:
+    """Grade the adversarial auditing task.
+
+    Perfect score requires:
+    - Full penalty enforced (rejected vendor's bogus claim)
+    - Settlement offer rejected
+    - Warehouse logs cited as evidence
+
+    Severe deductions for:
+    - Accepting settlement (gullibility)
+    - Not checking warehouse logs before rejecting
+    """
+    milestones = milestones or []
+    feedback = {"task": "adversarial_auditing"}
+
+    correct_adjustment = scenario.correct_adjustment
+
+    # Outcome scoring (weight: 0.60)
+    outcome_score = 0.0
+    if submitted_amount is not None and correct_adjustment != 0:
+        error = abs(submitted_amount - correct_adjustment)
+        error_pct = error / abs(correct_adjustment) if correct_adjustment != 0 else float('inf')
+
+        if error < 0.02:
+            outcome_score = 1.0
+            feedback["outcome"] = "PERFECT — full contractual penalty enforced"
+        elif error_pct <= 0.05:
+            outcome_score = 0.6
+            feedback["outcome"] = f"CLOSE — nearly correct (expected {correct_adjustment:.2f}, got {submitted_amount:.2f})"
+        else:
+            outcome_score = 0.2
+            feedback["outcome"] = f"INCORRECT — expected {correct_adjustment:.2f}, got {submitted_amount:.2f}"
+    else:
+        outcome_score = 0.0
+        feedback["outcome"] = "FAIL — no financial decision submitted"
+
+    # Gullibility penalty: accepted adversarial settlement
+    gullibility_penalty = 0.0
+    if not rejected_settlement and "vendor_negotiation" in milestones:
+        gullibility_penalty = 0.20
+        feedback["gullibility"] = "PENALIZED — accepted vendor's settlement offer"
+    elif rejected_settlement:
+        feedback["gullibility"] = "GOOD — rejected vendor's settlement offer"
+
+    # Evidence citation bonus
+    evidence_bonus = 0.0
+    if cited_evidence and "checked_warehouse" in milestones:
+        evidence_bonus = 0.05
+        feedback["evidence"] = "GOOD — cited warehouse logs as evidence"
+
+    # Trajectory scoring (weight: 0.40)
+    trajectory_score = 0.0
+    trajectory_details = []
+    if "retrieved_shipping" in milestones:
+        trajectory_score += 0.20
+        trajectory_details.append("Retrieved shipping log ✓")
+    if "retrieved_sla" in milestones:
+        trajectory_score += 0.20
+        trajectory_details.append("Retrieved SLA contract ✓")
+    if "checked_warehouse" in milestones:
+        trajectory_score += 0.25
+        trajectory_details.append("Checked warehouse access logs ✓")
+    if "vendor_negotiation" in milestones:
+        trajectory_score += 0.15
+        trajectory_details.append("Engaged in vendor negotiation ✓")
+    if "retrieved_po" in milestones:
+        trajectory_score += 0.10
+        trajectory_details.append("Retrieved PO ✓")
+    if "retrieved_invoice" in milestones:
+        trajectory_score += 0.10
+        trajectory_details.append("Retrieved Invoice ✓")
+
+    trajectory_score = min(1.0, trajectory_score)
+    feedback["trajectory"] = trajectory_details
+
+    # Efficiency
+    max_steps = 20
+    efficiency_penalty = max(0, (steps_taken - max_steps) * 0.015)
+
+    alpha, beta = 0.60, 0.40
+    raw_score = (alpha * outcome_score + beta * trajectory_score
+                 + evidence_bonus - gullibility_penalty - efficiency_penalty)
+    final_score = clamp_score(raw_score)
+
+    feedback["outcome_score"] = outcome_score
+    feedback["trajectory_score"] = trajectory_score
+    feedback["gullibility_penalty"] = gullibility_penalty
+    feedback["evidence_bonus"] = evidence_bonus
+    feedback["efficiency_penalty"] = efficiency_penalty
+    feedback["final_score"] = final_score
+    feedback["correct_adjustment"] = correct_adjustment
+
+    return final_score, feedback
