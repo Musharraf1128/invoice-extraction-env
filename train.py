@@ -237,6 +237,8 @@ def main():
 
         # Memory optimization
         gradient_checkpointing=True,
+        bf16=False,
+        fp16=True,
 
         # Hub integration
         push_to_hub=True,
