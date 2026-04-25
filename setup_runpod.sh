@@ -16,7 +16,7 @@ mkdir -p "$HF_HOME" "$TORCH_HOME"
 # This MUST happen before installing TRL or it will fail with FSDPModule error
 echo "📦 Upgrading PyTorch to 2.6 (CUDA 12.4)..."
 pip install -q --upgrade pip
-pip install -q "torch>=2.6" --index-url https://download.pytorch.org/whl/cu124
+pip install -q "torch>=2.6" "torchvision>=0.21" "torchaudio>=2.6" --index-url https://download.pytorch.org/whl/cu124
 
 # ── Install training dependencies ─────────────────────────────────────────
 
