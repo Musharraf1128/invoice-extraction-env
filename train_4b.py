@@ -182,8 +182,35 @@ class ESCTRToolEnv:
 
 # ── Reward function ───────────────────────────────────────────────────────
 def reward_func(environments, **kwargs) -> list[float]:
-    """Extract reward from each environment instance after episode completion."""
-    return [env.reward for env in environments]
+    """Shaped reward for GRPO — gives partial credit for investigation progress.
+
+    Without shaping, the model must call submit_financial_decision to get ANY
+    reward. Qwen3-4B never calls submit (it stops after investigating), so
+    all rewards are 0, GRPO has zero gradient, and nothing is learned.
+
+    Shaping:
+        - Each tool call earns a small bonus (0.05)
+        - Calling submit earns a larger bonus (0.15) regardless of correctness
+        - The environment's graded reward (0-1) is added on top
+        - This creates variance between rollouts even without submission
+    """
+    rewards = []
+    for env in environments:
+        # Base: the environment's graded reward (non-zero only if submitted)
+        r = env.reward
+
+        # Shaping: credit for investigation effort
+        step_count = env.env._state.step_count if hasattr(env.env, '_state') else 0
+        submitted = env.env._state.outcome_submitted if hasattr(env.env, '_state') else False
+
+        # Small per-step bonus for using tools (caps at 0.20)
+        investigation_bonus = min(step_count * 0.05, 0.20)
+
+        # Bonus for actually submitting (even with wrong amount)
+        submit_bonus = 0.15 if submitted else 0.0
+
+        rewards.append(r + investigation_bonus + submit_bonus)
+    return rewards
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
@@ -261,6 +288,7 @@ def main():
         num_generations=4,           # K=4: more rollouts = more reward variance
         max_completion_length=max_len,
         temperature=1.5,             # Force exploration (default 1.0 is too greedy for 4B)
+        max_tool_calling_iterations=10,  # Allow enough turns for investigate + submit
         log_completions=True,
         num_completions_to_print=1,
 
