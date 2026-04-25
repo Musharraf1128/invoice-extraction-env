@@ -12,9 +12,13 @@ export HF_HOME=/workspace/hf_cache
 export TORCH_HOME=/workspace/torch_cache
 mkdir -p "$HF_HOME" "$TORCH_HOME"
 
-# ── Install training dependencies ─────────────────────────────────────────
-# Pin versions known to work together (avoids Trackio/transformers mismatches)
+# ── Upgrade PyTorch first (RunPod template ships 2.4, TRL needs >= 2.5) ────
+# This MUST happen before installing TRL or it will fail with FSDPModule error
+echo "📦 Upgrading PyTorch to 2.6 (CUDA 12.4)..."
 pip install -q --upgrade pip
+pip install -q "torch>=2.6" --index-url https://download.pytorch.org/whl/cu124
+
+# ── Install training dependencies ─────────────────────────────────────────
 
 echo "📦 Installing TRL + PEFT + dependencies..."
 pip install -q \
@@ -42,7 +46,7 @@ print(f'  peft:         {peft.__version__}')
 print(f'  CUDA:         {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'  GPU:          {torch.cuda.get_device_name(0)}')
-    print(f'  VRAM:         {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB')
+    print(f'  VRAM:         {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB')
 
 # Verify ESCTR environment loads
 from server.environment import ESCTREnvironment

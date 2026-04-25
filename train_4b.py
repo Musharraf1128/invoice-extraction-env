@@ -201,7 +201,7 @@ def main():
     # ── Preflight checks ─────────────────────────────────────────────────
     assert torch.cuda.is_available(), "CUDA not available — this script requires a GPU."
     gpu = torch.cuda.get_device_properties(0)
-    vram_gb = round(gpu.total_mem / 1024**3, 1)
+    vram_gb = round(gpu.total_memory / 1024**3, 1)
     print(f"\n{'='*60}")
     print(f"  GPU: {gpu.name}  |  VRAM: {vram_gb} GB")
     print(f"  Model: {model_name}")
