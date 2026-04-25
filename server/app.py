@@ -9,12 +9,14 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
+import gradio as gr
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .models import ESCTRAction, ESCTRObservation, ESCTRState
 from .environment import ESCTREnvironment
+from .gradio_ui import build_gradio_app
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +206,10 @@ def create_app() -> FastAPI:
         finally:
             ws_env.close()
             logger.info("WebSocket session closed")
+
+    # ── Mount Gradio UI ──────────────────────────────────────────────────
+    gradio_app = build_gradio_app()
+    app = gr.mount_gradio_app(app, gradio_app, path="/")
 
     return app
 
