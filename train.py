@@ -216,16 +216,10 @@ def main():
 
         # GRPO settings
         num_generations=2,
-        max_completion_length=2048,  # ESCTR needs more tokens (multi-step investigation)
+        max_completion_length=2048,
         log_completions=True,
         num_completions_to_print=2,
         chat_template_kwargs={"enable_thinking": False},
-
-        # vLLM for fast generation
-        use_vllm=True,
-        vllm_mode="colocate",
-        vllm_gpu_memory_utilization=0.15,
-        vllm_max_model_length=4096,
 
         # Logging
         output_dir=output_dir,
