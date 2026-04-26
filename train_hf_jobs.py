@@ -18,33 +18,32 @@ import sys
 def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
-install("torch==2.4.0")
+# Pin torch 2.6 first (TRL 0.17+ needs FSDPModule from torch >= 2.6)
+install("torch>=2.6.0")
 install("transformers>=4.51.0")
 install("trl>=0.17.0")
 install("peft>=0.14.0")
 install("bitsandbytes>=0.43.0")
 install("datasets>=3.0.0")
 install("accelerate>=1.0.0")
-install("openenv>=0.4.0")
+install("openenv")
+install("jmespath")
 
-# Install our environment from HF Space
-subprocess.check_call([
-    sys.executable, "-m", "pip", "install", "-q",
-    "git+https://huggingface.co/spaces/musharraf7/esctr-environment"
-])
+# Install our environment package from the cloned repo
+script_dir = os.path.dirname(os.path.abspath(__file__))
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-e", script_dir])
+sys.path.insert(0, script_dir)
 
 # ── 1. Imports ───────────────────────────────────────────────────────────────
 import json
-import math
 import time
 from datetime import datetime
 
 import torch
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model
-from transformers import AutoTokenizer, BitsAndBytesConfig
+from peft import LoraConfig
+from transformers import AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
-from huggingface_hub import HfApi
 
 # ── 2. Config ────────────────────────────────────────────────────────────────
 MODEL_ID     = "Qwen/Qwen3-1.7B"
@@ -61,34 +60,105 @@ print(f"[CONFIG] Output: {OUTPUT_DIR}")
 print(f"[CONFIG] Push to: {HF_REPO_ID}")
 print(f"[CONFIG] GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
 
-# ── 3. Environment factory ───────────────────────────────────────────────────
+# ── 3. Environment wrapper (TRL-compatible) ──────────────────────────────────
 from server.environment import ESCTREnvironment
-from server.models import Action
+from server.models import ESCTRAction
 
-SYSTEM_PROMPT = """You are an autonomous financial auditor operating inside an Enterprise Resource Planning (ERP) system.
+class ESCTRToolEnv:
+    """TRL-compatible wrapper. Public methods with docstrings become tools."""
 
-Your job is to investigate financial discrepancies using the tools available to you, then submit a precise financial decision.
+    def __init__(self):
+        self.env = ESCTREnvironment()
+        self.reward = 0.0
+        self.done = False
 
-TOOLS:
-- query_database: Search corporate databases (purchase_orders, invoices, shipping_logs, sla_contracts, vendor_records)
-- read_document: Retrieve full document text by document_id
-- communicate_vendor: Send a message to the vendor
-- submit_financial_decision: Submit your final adjustment amount (this ends the episode)
+    def reset(self, **kwargs) -> str | None:
+        """Reset the environment and return the initial briefing."""
+        import random
+        seed = random.randint(0, 100_000)
+        obs = self.env.reset(task_name="procurement_reconciliation", seed=seed)
+        self.reward = 0.0
+        self.done = False
+        return obs.system_response
 
-RULES:
-1. Always investigate before submitting. Query at least 2 databases.
-2. Your adjustment amount must be mathematically precise.
-3. Respond ONLY with a valid JSON tool call. No prose, no <think> tags.
+    def query_database(self, table: str) -> str:
+        """Query a corporate database table to discover available records.
 
-FORMAT:
-{"action_type": "query_database", "query_parameters": {"table": "purchase_orders"}}
-{"action_type": "submit_financial_decision", "adjustment_amount": -450.00, "adjustment_reason": "Overcharge on 50 units at $5/unit difference"}
-"""
+        Args:
+            table: The database table to query. One of: 'purchase_orders', 'invoices', 'shipping_logs', 'sla_contracts', 'warehouse_logs'
 
-def environment_factory():
-    """Create a fresh ESCTR environment for each episode."""
-    env = ESCTREnvironment()
-    return env
+        Returns:
+            A summary of records found in the specified table.
+        """
+        if self.done:
+            return "Episode is over."
+        action = ESCTRAction(action_type="query_database", query_parameters={"table": table})
+        obs = self.env.step(action)
+        self.reward = obs.reward
+        self.done = obs.done
+        return obs.system_response
+
+    def read_document(self, document_id: str) -> str:
+        """Read a specific document by its unique identifier to see full details.
+
+        Args:
+            document_id: The document ID to read, e.g. 'PO-2024-0055' or 'INV-2024-0055'
+
+        Returns:
+            The full contents of the requested document.
+        """
+        if self.done:
+            return "Episode is over."
+        action = ESCTRAction(action_type="read_document", document_id=document_id)
+        obs = self.env.step(action)
+        self.reward = obs.reward
+        self.done = obs.done
+        return obs.system_response
+
+    def communicate_vendor(self, message_content: str) -> str:
+        """Send a message to the vendor during a dispute negotiation.
+
+        Args:
+            message_content: The message to send to the vendor.
+
+        Returns:
+            The vendor's response to your message.
+        """
+        if self.done:
+            return "Episode is over."
+        action = ESCTRAction(action_type="communicate_vendor", message_content=message_content)
+        obs = self.env.step(action)
+        self.reward = obs.reward
+        self.done = obs.done
+        return obs.system_response
+
+    def submit_financial_decision(self, adjustment_amount: float, adjustment_reason: str) -> str:
+        """Submit the final financial adjustment. This ends the episode.
+
+        Args:
+            adjustment_amount: The exact monetary adjustment amount as a float.
+            adjustment_reason: A brief explanation of why this adjustment is correct.
+
+        Returns:
+            The grading result with your score and feedback.
+        """
+        if self.done:
+            return "Episode is over."
+        action = ESCTRAction(
+            action_type="submit_financial_decision",
+            adjustment_amount=adjustment_amount,
+            adjustment_reason=adjustment_reason,
+        )
+        obs = self.env.step(action)
+        self.reward = obs.reward
+        self.done = obs.done
+        return obs.system_response
+
+    def _get_reward(self) -> float:
+        return self.reward
+
+    def _is_done(self) -> bool:
+        return self.done
 
 def make_dataset(n=EPISODES):
     """Generate n prompts for procurement_reconciliation task."""
@@ -98,46 +168,38 @@ def make_dataset(n=EPISODES):
         seed = random.randint(1, 999999)
         data.append({
             "prompt": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": f"[NEW EPISODE]\ntask: {TASK}\nseed: {seed}\n\nBegin your investigation."}
+                {"role": "system", "content": "You are an autonomous financial auditor. Use the provided tools to investigate discrepancies and submit a precise financial decision."},
+                {"role": "user",   "content": f"Begin your investigation. Find any overcharges or discrepancies."}
             ],
-            "seed": seed,
         })
     return Dataset.from_list(data)
 
 # ── 4. Shaped reward function ────────────────────────────────────────────────
-def shaped_reward_fn(completions, env_outputs, **kwargs):
-    """
-    Process reward shaping:
-    - +0.05 per unique valid investigation tool call
-    - Full env reward on top
-    Ensures GRPO always has gradient signal.
+def shaped_reward_fn(environments, **kwargs) -> list[float]:
+    """Shaped reward for GRPO — gives partial credit for investigation progress.
+
+    Without shaping, the model must call submit_financial_decision to get ANY
+    reward. This creates variance between rollouts even without submission.
     """
     rewards = []
-    for completion, env_out in zip(completions, env_outputs):
-        base_reward = env_out.get("reward", 0.0) if env_out else 0.0
+    for env in environments:
+        # Base: the environment's graded reward (non-zero only if submitted)
+        r = env.reward
 
-        # Count investigation steps from completion
-        investigation_bonus = 0.0
-        seen_tools = set()
-        text = completion if isinstance(completion, str) else str(completion)
-        for tool in ["query_database", "read_document", "communicate_vendor"]:
-            if tool in text and tool not in seen_tools:
-                investigation_bonus += 0.05
-                seen_tools.add(tool)
+        # Shaping: credit for investigation effort
+        step_count = env.env._state.step_count if hasattr(env.env, '_state') else 0
+        submitted = env.env._state.outcome_submitted if hasattr(env.env, '_state') else False
 
-        total = base_reward + investigation_bonus
-        rewards.append(min(total, 1.0))  # cap at 1.0
+        # Small per-step bonus for using tools (caps at 0.20)
+        investigation_bonus = min(step_count * 0.05, 0.20)
+
+        # Bonus for actually submitting (even with wrong amount)
+        submit_bonus = 0.15 if submitted else 0.0
+
+        rewards.append(r + investigation_bonus + submit_bonus)
     return rewards
 
-# ── 5. QLoRA config ──────────────────────────────────────────────────────────
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_use_double_quant=True,
-)
-
+# ── 5. LoRA config ───────────────────────────────────────────────────────────
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
@@ -157,14 +219,19 @@ grpo_config = GRPOConfig(
     num_generations=4,           # K rollouts per prompt
     temperature=1.4,             # exploration
     max_completion_length=768,
-    max_prompt_length=512,
+    max_tool_calling_iterations=8,
     learning_rate=5e-5,
     bf16=True,
+    gradient_checkpointing=True,
     logging_steps=5,
     save_steps=100,
-    report_to="none",            # no external trackers needed
+    save_total_limit=2,
+    log_completions=True,
+    num_completions_to_print=1,
+    chat_template_kwargs={"enable_thinking": False},
+    report_to="none",
+    push_to_hub=False,
     remove_unused_columns=False,
-    max_tool_calling_iterations=8,
 )
 
 # ── 7. Train ─────────────────────────────────────────────────────────────────
@@ -180,16 +247,11 @@ start_time = time.time()
 
 trainer = GRPOTrainer(
     model=MODEL_ID,
-    args=grpo_config,
-    train_dataset=dataset,
     reward_funcs=shaped_reward_fn,
-    environment_factory=environment_factory,
+    train_dataset=dataset,
+    args=grpo_config,
+    environment_factory=ESCTRToolEnv,
     peft_config=lora_config,
-    model_init_kwargs={
-        "quantization_config": bnb_config,
-        "torch_dtype": torch.bfloat16,
-        "trust_remote_code": True,
-    },
 )
 
 trainer.train()

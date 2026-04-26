@@ -39,3 +39,6 @@ runpod_setup.sh
 train_runpod.py
 uv.lock
 esctr-environment/
+esctr-environment/
+youtube_script.md
+setup_runpod.sh
