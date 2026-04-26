@@ -137,7 +137,6 @@ We scaled our training to **Qwen/Qwen3-4B** on a single **RTX 4090 (24GB VRAM)**
 | **Last 20 Episodes** | **0.1938** (+10%) | **0.2706** | **4.0** | **0** |
 
 *Hardware Time: 300 Episodes completed in exactly 71.3 minutes.*
-*Model Weights: Available at [`musharraf7/esctr-grpo-4b-lora`](https://huggingface.co/musharraf7/esctr-grpo-4b-lora)*
 
 #### 📉 The Path to 4B: Overcoming "Zero-Reward Collapse"
 
@@ -285,7 +284,7 @@ python generate_demo_artifacts.py
 
 - 📝 **Writeup**: [Training Autonomous Financial Auditors with RLVR](blog_post.md)
 - 🤗 **HF Space**: [`musharraf7/esctr-environment`](https://huggingface.co/spaces/musharraf7/esctr-environment)
-- 🧠 **Trained Model (LoRA)**: [`musharraf7/esctr-grpo-4b-lora`](https://huggingface.co/musharraf7/esctr-grpo-4b-lora)
+- 🧠 **Training Script (4B LoRA)**: [`train_4b.py`](train_4b.py) — self-contained, RunPod-ready
 - 📊 **Training Dashboard**: [Trackio](https://huggingface.co/spaces/musharraf7/esctr-grpo-trained)
 - 🏋️ **Training Scripts**: [`train.py`](train.py) (0.6B) · [`train_4b.py`](train_4b.py) (4B + LoRA)
 
