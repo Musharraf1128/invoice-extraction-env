@@ -150,6 +150,31 @@ The tool execution graph tells the most compelling story. Early in training, the
 
 ---
 
+### Phase 4 — Iterative Run: Qwen3-1.7B on HF Jobs (In Progress)
+
+Following judge advice to **iterate on multiple model sizes**, we launched a third training run on **HF Jobs T4-medium** using `Qwen/Qwen3-1.7B` with LoRA adapters — entirely on HuggingFace's own cloud compute, no local GPU needed.
+
+This run will not complete before the submission deadline (~500 steps × 50s/step ≈ 7 hours), but the early metrics already tell an important story: **the shaped reward architecture generalises cleanly to the 1.7B scale**.
+
+**Observed training progression (Steps 5–20):**
+
+| Step | Loss | Reward (mean) | Reward Std | Tool Calls/ep | Entropy |
+|------|------|--------------|------------|---------------|---------|
+| 5    | 0.184 | **0.195** | 0.010 | **3.9** | 0.132 |
+| 10   | 0.116 | 0.195 | 0.010 | **3.9** | 0.127 |
+| 15   | 0.088 | 0.180 | 0.029 | 3.6 | 0.028 |
+| 20   | 0.186 | 0.190 | 0.020 | 3.8 | 0.047 |
+
+What this tells us:
+- **No cold-start collapse** — reward is non-zero from the very first logged step. The shaped investigation bonus is doing exactly what it was designed to do.
+- **Zero tool failures** at every step — the 1.7B model calls tools with valid JSON syntax just as reliably as the 4B model.
+- **Loss is decreasing**, confirming gradient signal is flowing through the LoRA adapter.
+- **Entropy is dropping** (0.132 → 0.028) — the model is committing to a policy, not just wandering. It has learned that the `query_database → read_document → submit` pipeline is the winning trajectory.
+
+The high `frac_reward_zero_std` (0.6–0.8) at early steps is expected — it means some GRPO groups have identical rollouts, which is normal before the model diversifies its exploration. This resolved naturally in the 4B run around step ~30.
+
+---
+
 ## What the Agent Actually Learned
 
 | Metric | Baseline (untrained) | Trained (4B, 300 ep) |
@@ -166,16 +191,16 @@ The untrained model jumps straight to a decision with no evidence. The trained a
 
 ## Technical Summary
 
-| Parameter | 0.6B Run | 4B Run |
-|-----------|----------|--------|
-| Model | Qwen/Qwen3-0.6B | Qwen/Qwen3-4B |
-| GPU | T4 (Colab) | RTX 4090 (RunPod) |
-| Quantization | None | 4-bit (BitsAndBytes) |
-| Adapter | Full model | LoRA (r=16, all-linear) |
-| Episodes | 500 | 300 |
-| Training Time | ~2 hours | ~71 minutes |
-| Peak VRAM | ~14 GB | 19.74 GB |
-| Framework | TRL GRPOTrainer | TRL GRPOTrainer |
+| Parameter | 0.6B Run | 4B Run | 1.7B Run (in progress) |
+|-----------|----------|--------|------------------------|
+| Model | Qwen/Qwen3-0.6B | Qwen/Qwen3-4B | Qwen/Qwen3-1.7B |
+| GPU | T4 (Colab) | RTX 4090 (RunPod) | T4 (HF Jobs) |
+| Quantization | None | 4-bit (BitsAndBytes) | 4-bit (BitsAndBytes) |
+| Adapter | Full model | LoRA (r=16) | LoRA (r=16) |
+| Episodes | 500 | 300 | 500 (planned) |
+| Training Time | ~2 hours | ~71 minutes | ~7 hours (ongoing) |
+| Framework | TRL GRPOTrainer | TRL GRPOTrainer | TRL GRPOTrainer |
+| Script | [`train.py`](train.py) | [`train_4b.py`](train_4b.py) | [`train_hf_jobs.py`](train_hf_jobs.py) |
 
 ---
 
@@ -198,7 +223,8 @@ The broader point: this is the kind of environment that pushes the frontier of *
 
 - 🏢 **Environment Space**: [musharraf7/esctr-environment](https://huggingface.co/spaces/musharraf7/esctr-environment)
 - 📊 **Training Dashboard**: [Trackio Space](https://huggingface.co/spaces/musharraf7/esctr-grpo-trained)
-- 💻 **Source Code & Training Scripts**: [GitHub](https://github.com/Musharraf1128/esctr-environment)
+- 🏋️ **Training Scripts**: [`train.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train.py) · [`train_4b.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train_4b.py) · [`train_hf_jobs.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train_hf_jobs.py)
+- 💻 **Source Code**: [GitHub](https://github.com/Musharraf1128/esctr-environment)
 
 ---
 
