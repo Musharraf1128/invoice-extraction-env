@@ -14,7 +14,7 @@ tags:
 
 > **Training LLMs to be autonomous financial auditors** — an OpenEnv environment for teaching AI agents to investigate procurement discrepancies, enforce SLA penalties, and navigate adversarial vendor disputes using **Reinforcement Learning with Verifiable Rewards (RLVR)**.
 
-**Space URL:** [`musharraf7/esctr-environment`](https://huggingface.co/spaces/musharraf7/esctr-environment) · **Training Dashboard:** [Trackio](https://huggingface.co/spaces/musharraf7/esctr-grpo-trained) · **Training Script:** [`train.py`](train.py)
+**Space URL:** [`musharraf7/esctr-environment`](https://huggingface.co/spaces/musharraf7/esctr-environment) · **Training Dashboard:** [Trackio](https://huggingface.co/spaces/musharraf7/esctr-grpo-trained) · **Training Scripts:** [`train.py`](train.py) · [`train_4b.py`](train_4b.py) · [`train_hf_jobs.py`](train_hf_jobs.py)
 
 ---
 
@@ -285,7 +285,7 @@ python generate_demo_artifacts.py
 - 📝 **Writeup (Blog.md)**: [Training Autonomous Financial Auditors with RLVR](https://github.com/Musharraf1128/esctr-environment/blob/main/Blog.md)
 - 🤗 **HF Space (live env)**: [`musharraf7/esctr-environment`](https://huggingface.co/spaces/musharraf7/esctr-environment)
 - 📊 **Training Dashboard**: [Trackio](https://huggingface.co/spaces/musharraf7/esctr-grpo-trained)
-- 🏋️ **Training Scripts**: [`train.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train.py) (0.6B · TRL GRPO) · [`train_4b.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train_4b.py) (4B · LoRA)
+- 🏋️ **Training Scripts**: [`train.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train.py) (0.6B · TRL GRPO) · [`train_4b.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train_4b.py) (4B · LoRA) · [`train_hf_jobs.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train_hf_jobs.py) (1.7B · HF Jobs)
 - 💻 **GitHub Repository**: [Musharraf1128/esctr-environment](https://github.com/Musharraf1128/esctr-environment)
 
 ## Why This Matters
@@ -347,7 +347,7 @@ The baseline model jumps to a decision with no investigation, while the trained 
 │   └── comparison_chart.png   # Baseline vs Trained comparison
 ├── train.py               # TRL GRPO training script (0.6B, environment_factory)
 ├── train_4b.py            # 4B LoRA training script (RTX 4090 optimized)
-├── setup_runpod.sh        # RunPod environment setup script
+├── train_hf_jobs.py       # 1.7B LoRA training script (HF Jobs T4)
 ├── inference.py           # Baseline inference script
 ├── openenv.yaml           # OpenEnv manifest
 ├── pyproject.toml         # Package config
