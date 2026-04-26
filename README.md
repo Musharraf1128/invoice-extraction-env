@@ -282,11 +282,11 @@ python generate_demo_artifacts.py
 
 ## Submission Materials
 
-- 📝 **Writeup**: [Training Autonomous Financial Auditors with RLVR](Blog.md)
-- 🤗 **HF Space**: [`musharraf7/esctr-environment`](https://huggingface.co/spaces/musharraf7/esctr-environment)
-- 🧠 **Training Script (4B LoRA)**: [`train_4b.py`](train_4b.py) — self-contained, RunPod-ready
+- 📝 **Writeup (Blog.md)**: [Training Autonomous Financial Auditors with RLVR](https://github.com/Musharraf1128/esctr-environment/blob/main/Blog.md)
+- 🤗 **HF Space (live env)**: [`musharraf7/esctr-environment`](https://huggingface.co/spaces/musharraf7/esctr-environment)
 - 📊 **Training Dashboard**: [Trackio](https://huggingface.co/spaces/musharraf7/esctr-grpo-trained)
-- 🏋️ **Training Scripts**: [`train.py`](train.py) (0.6B) · [`train_4b.py`](train_4b.py) (4B + LoRA)
+- 🏋️ **Training Scripts**: [`train.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train.py) (0.6B · TRL GRPO) · [`train_4b.py`](https://github.com/Musharraf1128/esctr-environment/blob/main/train_4b.py) (4B · LoRA)
+- 💻 **GitHub Repository**: [Musharraf1128/esctr-environment](https://github.com/Musharraf1128/esctr-environment)
 
 ## Why This Matters
 
