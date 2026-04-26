@@ -115,7 +115,7 @@ To increase novelty and robustness for judging, ESCTR now includes three high-im
 
 ## Training Results: Scaling to 4B Parameters
 
-For the OpenEnv hackathon, we trained two models on the Procurement Reconciliation task using **TRL's GRPOTrainer** with `environment_factory`, demonstrating both a fast proof-of-concept and a high-performance production pipeline operating under strict hardware constraints.
+For the OpenEnv hackathon, we trained three models on the Procurement Reconciliation task using **TRL's GRPOTrainer** with `environment_factory`, iterating across model sizes from 0.6B to 4B — following the judge-recommended approach of **small models + fast iteration**.
 
 ### 🚀 Production Model: Qwen3-4B (GRPO + LoRA)
 
@@ -148,6 +148,20 @@ Scaling from 0.6B to 4B was **not** plug-and-play. Our first three training atte
    **Fix:** Implemented **Process Reward Shaping** — injecting `+0.05` partial credit for each valid investigation step. Raised `temperature=1.5` and `K=4` to force exploration diversity. This finally jump-started the gradient space.
 
 *This debugging process — from silent failure to shaped rewards — was the core engineering challenge of the project and took ~4 hours of iterative hypothesis testing.*
+
+### 🔄 Iterative Run: Qwen3-1.7B on HF Jobs (In Progress)
+
+Following the judge recommendation to **iterate on small models with multiple runs**, we launched a third training run on **HF Jobs T4-medium** using `Qwen/Qwen3-1.7B` with LoRA adapters — this time running entirely on HuggingFace infrastructure.
+
+**Early metrics (Step 5):**
+| Metric | Value |
+|--------|-------|
+| Mean Reward | **0.195** |
+| Tool Calls/Episode | **3.9** (converging to 4.0) |
+| Tool Failures | **0** |
+| Loss | **0.184** (non-zero, gradient flowing) |
+
+The model is already exhibiting the correct investigation pattern: `query_database(purchase_orders)` → `query_database(invoices)` → `read_document(PO)` → `read_document(INV)`. Training script: [`train_hf_jobs.py`](train_hf_jobs.py).
 
 ### Proof of Concept: Qwen3-0.6B
 
